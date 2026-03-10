@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kubeflow Docs Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="brand-mark">KF</div>
+          <div>
+            <p class="eyebrow">Kubeflow RAG</p>
+            <h1>Docs Agent</h1>
+          </div>
+        </div>
+
+        <button id="new-thread-button" class="new-thread-button">+ New Thread</button>
+
+        <div class="sidebar-section">
+          <p class="sidebar-label">Saved Threads</p>
+          <div id="thread-list" class="thread-list"></div>
+        </div>
+
+        <div class="sidebar-footer">
+          <p id="provider-badge" class="provider-badge">Checking model...</p>
+          <p class="sidebar-note">Retrieval is served from Milvus on your local Kubeflow stack.</p>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Reference Assistant</p>
+            <h2>Ask your Kubeflow documentation</h2>
+          </div>
+          <div id="collection-chip" class="collection-chip">Collection</div>
+        </header>
+
+        <section id="empty-state" class="empty-state">
+          <div class="empty-copy">
+            <p class="eyebrow">Ready</p>
+            <h3>Search-first answers with citations</h3>
+            <p>
+              Ask about Pipelines, KServe, Trainer, Katib, or cluster setup. The assistant retrieves
+              the most relevant chunks before answering.
+            </p>
+          </div>
+          <div class="starter-grid">
+            <button class="starter-card" data-prompt="What is Kubeflow and what problems does it solve?">
+              What is Kubeflow?
+            </button>
+            <button class="starter-card" data-prompt="Explain Kubeflow Pipelines in simple terms.">
+              Explain Kubeflow Pipelines
+            </button>
+            <button class="starter-card" data-prompt="What is KServe used for in Kubeflow?">
+              What is KServe used for?
+            </button>
+            <button class="starter-card" data-prompt="What are the main Kubeflow components?">
+              Main Kubeflow components
+            </button>
+          </div>
+        </section>
+
+        <section id="message-list" class="message-list"></section>
+
+        <form id="composer-form" class="composer">
+          <textarea
+            id="message-input"
+            rows="1"
+            placeholder="Ask about Kubeflow docs..."
+          ></textarea>
+          <div class="composer-actions">
+            <p class="composer-hint">Shift + Enter for a new line</p>
+            <button id="send-button" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message-meta">
+          <span class="message-role"></span>
+        </div>
+        <div class="message-bubble"></div>
+        <div class="message-sources"></div>
+      </article>
+    </template>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
