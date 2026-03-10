@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.venv/
+pipelines/*.yaml
+k8s/rag-llm-secret.yaml
