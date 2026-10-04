@@ -1,63 +1,46 @@
+import os
+
 from fastmcp import FastMCP
-from pymilvus import MilvusClient
-from sentence_transformers import SentenceTransformer
 
-MILVUS_URI = "http://milvus.<YOUR_NAMESPACE>.svc.cluster.local:19530"
-MILVUS_USER = "root"
-MILVUS_PASSWORD = "Milvus"
-COLLECTION_NAME = "kubeflow_docs_docs_rag"
-EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
-PORT = 8000
+from agent.core.retriever import format_hits, search_code, search_context, search_docs
 
-mcp = FastMCP("Kubeflow Docs MCP Server")
+PORT = int(os.getenv("PORT", "8000"))
 
-model: SentenceTransformer = None
-client: MilvusClient = None
+mcp = FastMCP("Kubeflow Agentic RAG MCP Server")
 
 
-def _init():
-    global model, client
-    if model is None:
-        model = SentenceTransformer(EMBEDDING_MODEL)
-    if client is None:
-        client = MilvusClient(uri=MILVUS_URI, user=MILVUS_USER, password=MILVUS_PASSWORD)
+@mcp.tool()
+def search_kubeflow_context(
+    query: str,
+    top_k: int = 5,
+    target: str = "auto",
+) -> str:
+    """Search Kubeflow docs, manifests, or both with shared routing."""
+    try:
+        formatted, _, route = search_context(query=query, top_k=top_k, target=target)
+        return f"[ROUTE]\nTarget: {route.target}\nReason: {route.reason}\n\n{formatted}"
+    except Exception as exc:
+        return f"search_kubeflow_context failed: {exc}"
 
 
 @mcp.tool()
 def search_kubeflow_docs(query: str, top_k: int = 5) -> str:
-    """Search Kubeflow documentation using semantic similarity.
+    """Search the official Kubeflow documentation collection."""
+    try:
+        hits, _ = search_docs(query=query, top_k=top_k)
+        return format_hits(hits)[0]
+    except Exception as exc:
+        return f"search_kubeflow_docs failed: {exc}"
 
-    Args:
-        query: The search query about Kubeflow.
-        top_k: Number of results to return (default 5).
 
-    Returns:
-        Formatted search results with content and citation URLs.
-    """
-    _init()
-
-    embedding = model.encode(query).tolist()
-
-    hits = client.search(
-        collection_name=COLLECTION_NAME,
-        data=[embedding],
-        limit=top_k,
-        output_fields=["content_text", "citation_url", "file_path"],
-    )[0]
-
-    if not hits:
-        return "No results found for your query."
-
-    results = []
-    for i, hit in enumerate(hits, 1):
-        entity = hit["entity"]
-        entry = f"### Result {i} (score: {hit['distance']:.4f})"
-        entry += f"\n**Source:** {entity.get('citation_url', '')}"
-        entry += f"\n**File:** {entity.get('file_path', '')}"
-        entry += f"\n\n{entity.get('content_text', '')}\n"
-        results.append(entry)
-
-    return "\n---\n".join(results)
+@mcp.tool()
+def search_kubeflow_code(query: str, top_k: int = 5) -> str:
+    """Search Kubeflow release code for YAML, RBAC, Helm, and implementation details."""
+    try:
+        hits, _ = search_code(query=query, top_k=top_k)
+        return format_hits(hits)[0]
+    except Exception as exc:
+        return f"search_kubeflow_code failed: {exc}"
 
 
 if __name__ == "__main__":

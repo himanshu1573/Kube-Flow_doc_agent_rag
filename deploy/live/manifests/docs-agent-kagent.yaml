@@ -1,0 +1,58 @@
+apiVersion: kagent.dev/v1alpha2
+kind: ModelConfig
+metadata:
+  name: groq-llama
+  namespace: docs-agent
+spec:
+  apiKeySecret: kagent-groq
+  apiKeySecretKey: GROQ_API_KEY
+  model: llama-3.1-8b-instant
+  provider: OpenAI
+  openAI:
+    baseUrl: https://api.groq.com/openai/v1
+---
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: kubeflow-rag-mcp
+  namespace: docs-agent
+spec:
+  description: MCP server for routed Kubeflow docs and code retrieval via Milvus
+  url: http://mcp-kubeflow-docs.docs-agent.svc.cluster.local:8000/mcp
+---
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: kubeflow-rag-agent
+  namespace: docs-agent
+spec:
+  description: Kubeflow docs and code retrieval assistant
+  type: Declarative
+  declarative:
+    modelConfig: groq-llama
+    tools:
+      - type: McpServer
+        mcpServer:
+          name: kubeflow-rag-mcp
+          kind: RemoteMCPServer
+          toolNames:
+            - search_kubeflow_context
+            - search_kubeflow_docs
+            - search_kubeflow_code
+    systemMessage: |-
+      You are the Kubeflow Agentic RAG Assistant.
+
+      Your role
+      - Answer Kubeflow questions directly and concisely.
+      - Use grounded evidence when the question depends on Kubeflow-specific docs or manifests.
+
+      Tool use
+      - Prefer `search_kubeflow_context` first because it can auto-route between docs and code.
+      - Use `search_kubeflow_docs` for concepts, installation, architecture, SDK usage, and how-to questions.
+      - Use `search_kubeflow_code` for manifests, YAML, RBAC, Helm, Kustomize, and debugging questions.
+      - Never expose raw tool call JSON to the user.
+
+      Style
+      - Be concise.
+      - Cite the URLs returned by the tools.
+      - If the docs are insufficient, say so directly.

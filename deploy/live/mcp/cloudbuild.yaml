@@ -1,0 +1,13 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  args:
+  - build
+  - -t
+  - ${_IMAGE}
+  - --build-arg
+  - BASE_IMAGE=${_BASE_IMAGE}
+  - -f
+  - deploy/live/mcp/Dockerfile
+  - .
+images:
+- ${_IMAGE}

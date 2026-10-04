@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-kubeflow-docs
-  namespace: <YOUR_NAMESPACE>
+  namespace: docs-agent
 spec:
   replicas: 1
   selector:
@@ -15,7 +15,8 @@ spec:
     spec:
       containers:
         - name: mcp-server
-          image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
+          image: asia-south1-docker.pkg.dev/<PROJECT_ID>/docs-agent/mcp-kubeflow-docs:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:
@@ -24,42 +25,42 @@ spec:
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: MILVUS_HOST
-              value: "milvus.<YOUR_NAMESPACE>.svc.cluster.local"
+              value: milvus.docs-agent.svc.cluster.local
             - name: MILVUS_PORT
               value: "19530"
             - name: DOCS_COLLECTION
-              value: "docs_collection"
+              value: docs_collection
             - name: LEGACY_DOCS_COLLECTION
-              value: "docs_rag"
+              value: docs_rag
             - name: CODE_COLLECTION
-              value: "code_collection"
+              value: code_collection
             - name: EMBEDDING_MODEL
-              value: "BAAI/bge-base-en-v1.5"
+              value: BAAI/bge-base-en-v1.5
             - name: KUBEFLOW_CODE_BASE_URL
-              value: "https://github.com/kubeflow/manifests/blob/master"
+              value: https://github.com/kubeflow/manifests/blob/master
           readinessProbe:
             tcpSocket:
               port: 8000
-            initialDelaySeconds: 30
+            initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
               port: 8000
-            initialDelaySeconds: 60
-            periodSeconds: 30
+            initialDelaySeconds: 40
+            periodSeconds: 20
           resources:
             requests:
-              memory: "1Gi"
               cpu: "500m"
+              memory: "1Gi"
             limits:
-              memory: "2Gi"
               cpu: "1"
+              memory: "2Gi"
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: mcp-kubeflow-docs
-  namespace: <YOUR_NAMESPACE>
+  namespace: docs-agent
 spec:
   selector:
     app: mcp-kubeflow-docs

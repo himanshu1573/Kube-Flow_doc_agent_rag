@@ -1,4 +1,5 @@
 fastmcp
 pymilvus
+marshmallow<4
 sentence-transformers
 torch

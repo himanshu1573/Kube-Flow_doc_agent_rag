@@ -1,0 +1,28 @@
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: kubeflow-rag-agent
+  namespace: <YOUR_NAMESPACE>
+spec:
+  description: "Kubeflow docs and code retrieval assistant"
+  type: Declarative
+  declarative:
+    modelConfig: <YOUR_MODEL_CONFIG>
+    tools:
+      - type: McpServer
+        mcpServer:
+          name: kubeflow-rag-mcp
+          kind: RemoteMCPServer
+          toolNames:
+            - search_kubeflow_context
+            - search_kubeflow_docs
+            - search_kubeflow_code
+    systemMessage: |-
+      You are the Kubeflow Agentic RAG Assistant.
+
+      Use `search_kubeflow_context` first for most Kubeflow questions.
+      Use `search_kubeflow_docs` for conceptual and documentation-heavy topics.
+      Use `search_kubeflow_code` for manifests, YAML, RBAC, webhooks, Helm, and debugging.
+
+      Never expose raw tool call JSON to the user.
+      Summarize results in your own words and cite the URLs provided by the tool.

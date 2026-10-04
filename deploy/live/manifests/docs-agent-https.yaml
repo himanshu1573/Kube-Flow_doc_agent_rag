@@ -1,0 +1,53 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: kubeflow-agent-api-backendconfig
+  namespace: docs-agent
+spec:
+  timeoutSec: 600
+  healthCheck:
+    requestPath: /health
+    port: 8000
+    type: HTTP
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: kubeflow-agent-api-frontendconfig
+  namespace: docs-agent
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: PERMANENT_REDIRECT
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: kubeflow-agent-api-cert
+  namespace: docs-agent
+spec:
+  domains:
+    - <API_DOMAIN>
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubeflow-agent-api-ingress
+  namespace: docs-agent
+  annotations:
+    kubernetes.io/ingress.class: gce
+    kubernetes.io/ingress.global-static-ip-name: docs-agent-api-global
+    networking.gke.io/managed-certificates: kubeflow-agent-api-cert
+    networking.gke.io/v1beta1.FrontendConfig: kubeflow-agent-api-frontendconfig
+spec:
+  rules:
+    - host: <API_DOMAIN>
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: kubeflow-agent-api
+                port:
+                  number: 8000

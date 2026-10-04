@@ -28,8 +28,8 @@ Deploy the Kubeflow documentation assistant using kagent, MCP, Feast, and Milvus
 
 - **`<YOUR_DOCKERHUB_USERNAME>`**
   - Your Docker Hub (or other registry) account name.
-  - Build and push the MCP image from `mcp-server/`:
-    - `docker build -t <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest .`
+  - Build and push the MCP image from the repo root so the shared `agent/` and `pipelines/` packages are included:
+    - `docker build -f kagent-feast-mcp/mcp-server/Dockerfile -t <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest .`
     - `docker push <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest`
   - Used in:
     - `manifests/mcp-server/mcp-server.yaml` (`image: <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest`)
@@ -108,11 +108,10 @@ Upload the generated `github_rag_pipeline.yaml` to the KFP dashboard and create 
 
 ### Step 5: Build, Push, and Deploy MCP Server
 
-From the `mcp-server/` directory, build and push the MCP image to your registry (Docker Hub example shown; adjust `<YOUR_DOCKERHUB_USERNAME>` and tags as needed):
+From the repo root, build and push the MCP image to your registry (Docker Hub example shown; adjust `<YOUR_DOCKERHUB_USERNAME>` and tags as needed):
 
 ```bash
-cd mcp-server
-docker build -t <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest .
+docker build -f kagent-feast-mcp/mcp-server/Dockerfile -t <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest .
 docker push <YOUR_DOCKERHUB_USERNAME>/mcp-kubeflow-docs:latest
 ```
 
@@ -160,7 +159,7 @@ kubectl apply -f manifests/kagent/setup.yaml
 Verify:
 
 ```bash
-kubectl get pods -n <YOUR_NAMESPACE> | grep -E 'kagent|kubeflow-docs-agent'
+kubectl get pods -n <YOUR_NAMESPACE> | grep -E 'kagent|kubeflow-rag-agent'
 kubectl get agents,remotemcpservers,modelconfigs -n <YOUR_NAMESPACE>
 ```
 
@@ -191,7 +190,7 @@ kill %1
 ```bash
 kubectl get pods -n <YOUR_NAMESPACE> | grep milvus
 kubectl logs -f deployment/mcp-kubeflow-docs -n <YOUR_NAMESPACE>
-kubectl logs -f deployment/kubeflow-docs-agent -n <YOUR_NAMESPACE>
+kubectl get agent kubeflow-rag-agent -n <YOUR_NAMESPACE> -o yaml
 kubectl get agents,remotemcpservers,modelconfigs -n <YOUR_NAMESPACE>
 ```
 
