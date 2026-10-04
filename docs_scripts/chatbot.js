@@ -515,7 +515,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Handle streaming response
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-            
+            let sseBuffer = '';
+
             // Reset current message state
             currentMessageDiv = null;
             currentMessageContent = '';
@@ -528,8 +529,11 @@ document.addEventListener('DOMContentLoaded', async function() {
                     break;
                 }
                 
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
+                // SSE events can be split across network chunks: keep the trailing
+                // partial line buffered until the next chunk completes it.
+                sseBuffer += decoder.decode(value, { stream: true });
+                const lines = sseBuffer.split('\n');
+                sseBuffer = lines.pop();
                 
                 for (const line of lines) {
                     if (line.trim() === '') continue;

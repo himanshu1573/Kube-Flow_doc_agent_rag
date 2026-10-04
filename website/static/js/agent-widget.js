@@ -304,6 +304,7 @@
       // Stream response
       var reader = response.body.getReader();
       var decoder = new TextDecoder();
+      var sseBuffer = "";
       var content = "";
       var citations = [];
 
@@ -319,8 +320,11 @@
           break;
         }
 
-        var chunk = decoder.decode(result.value);
-        var lines = chunk.split("\n");
+        // SSE events can be split across network chunks: keep the trailing
+        // partial line buffered until the next chunk completes it.
+        sseBuffer += decoder.decode(result.value, { stream: true });
+        var lines = sseBuffer.split("\n");
+        sseBuffer = lines.pop();
 
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i];
