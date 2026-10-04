@@ -51,6 +51,11 @@ spec:
               value: "3600"
             - name: THREAD_MAX_MESSAGES
               value: "16"
+            # Public website deployments: require visitors to bring their own LLM key.
+            - name: ALLOW_CLIENT_API_KEYS
+              value: "true"
+            - name: REQUIRE_CLIENT_API_KEY
+              value: "true"
           readinessProbe:
             httpGet:
               path: /health
