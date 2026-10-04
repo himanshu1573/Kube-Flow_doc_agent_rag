@@ -1,3 +1,5 @@
+# CPU-only PyTorch wheels keep the image small.
+--extra-index-url https://download.pytorch.org/whl/cpu
 fastapi
 uvicorn[standard]
 pydantic
@@ -5,5 +7,5 @@ httpx
 sentence-transformers
 pymilvus
 marshmallow<4
-torch --extra-index-url https://download.pytorch.org/whl/cpu
+torch
 numpy
