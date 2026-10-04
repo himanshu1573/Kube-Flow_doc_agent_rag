@@ -1,11 +1,33 @@
 # Kubeflow Documentation RAG Pipelines
 
-This directory contains Kubeflow Pipelines for processing Kubeflow documentation and building a Retrieval-Augmented Generation (RAG) system.
+This directory contains the Phase 1 ingestion pipelines for building the
+Kubeflow docs-agent retrieval index.
+
+## Canonical Phase 1 Pipelines
+
+- `docs_ingestion/pipeline.py`: crawls `kubeflow.org/docs`, chunks content, embeds it, and upserts into `docs_collection`
+- `code_ingestion/pipeline.py`: clones `kubeflow/manifests`, parses code and manifests, embeds them, and upserts into `code_collection`
+- `code_ingestion/full_pipeline.yaml`: compiled parent pipeline that runs both docs and code ingestion when both sources are available
+
+The shared Phase 1 backend contract is:
+
+- `docs_collection` for official website documentation
+- `code_collection` for Kubeflow release/manifests code
+- HNSW + COSINE Milvus indexes
+- configurable embedding model through `EMBEDDING_MODEL`
+
+## Legacy Pipelines
+
+The top-level `kubeflow-pipeline.py` and `incremental-pipeline.py` scripts are
+older docs-only ingestion paths kept for compatibility. New Phase 1 work should
+prefer the modular `docs_ingestion/` and `code_ingestion/` pipelines above.
 
 ## 📁 Files Overview
 
 - **`kubeflow-pipeline.py`** - Full rebuild pipeline (processes entire documentation corpus)
 - **`incremental-pipeline.py`** - Incremental pipeline (processes only changed files)
+- **`docs_ingestion/pipeline.py`** - Canonical modular docs ingestion pipeline
+- **`code_ingestion/pipeline.py`** - Canonical modular code ingestion pipeline
 - **`github_rag_pipeline.yaml`** - Compiled full pipeline
 - **`github_rag_incremental_pipeline.yaml`** - Compiled incremental pipeline
 

@@ -6,7 +6,9 @@ Supports multiple embedding backends:
   - openai (API-based, for production)
 
 Configure via environment variables:
-  EMBEDDING_MODEL: Model name/path (default: sentence-transformers/all-MiniLM-L6-v2)
+  EMBEDDING_MODEL: Model name/path (default: BAAI/bge-base-en-v1.5)
+  EMBEDDING_DEVICE: Execution device for local sentence-transformers models
+    (default: cpu)
   OPENAI_API_KEY: Required only when EMBEDDING_MODEL=openai
 """
 
@@ -21,8 +23,13 @@ logger = logging.getLogger(__name__)
 def get_embedding_model_name() -> str:
     """Get the configured embedding model name from environment."""
     return os.environ.get(
-        "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        "EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5"
     )
+
+
+def get_embedding_device() -> str:
+    """Get the configured local embedding device."""
+    return os.environ.get("EMBEDDING_DEVICE", "cpu")
 
 
 def get_embedding_dimension() -> int:
@@ -35,6 +42,10 @@ def get_embedding_dimension() -> int:
     dimension_map = {
         "sentence-transformers/all-MiniLM-L6-v2": 384,
         "sentence-transformers/all-mpnet-base-v2": 768,
+        "BAAI/bge-base-en-v1.5": 768,
+        "BAAI/bge-large-en-v1.5": 1024,
+        "intfloat/e5-base-v2": 768,
+        "intfloat/e5-large-v2": 1024,
         "nomic-embed-text": 768,
         "openai": 1536,
         "text-embedding-3-small": 1536,
@@ -47,6 +58,32 @@ def get_embedding_dimension() -> int:
         "Unknown model '%s', defaulting to 384 dimensions.", model_name
     )
     return 384
+
+
+def prepare_embedding_texts(
+    texts: List[str],
+    model_name: Optional[str] = None,
+    purpose: str = "passage",
+) -> List[str]:
+    """Prepare texts for instruction-tuned embedding models.
+
+    Args:
+        texts: Raw texts to embed.
+        model_name: Optional model override.
+        purpose: One of "query" or "passage".
+    """
+    resolved_model = (model_name or get_embedding_model_name()).lower()
+    normalized_purpose = "query" if purpose == "query" else "passage"
+
+    if "intfloat/e5" in resolved_model or resolved_model.startswith("e5"):
+        prefix = "query: " if normalized_purpose == "query" else "passage: "
+        return [f"{prefix}{text}" for text in texts]
+
+    if "bge" in resolved_model and normalized_purpose == "query":
+        instruction = "Represent this sentence for searching relevant passages: "
+        return [f"{instruction}{text}" for text in texts]
+
+    return texts
 
 
 class EmbeddingClient:
@@ -65,11 +102,16 @@ class EmbeddingClient:
             batch_size: Number of texts to embed per batch.
         """
         self.model_name = model_name or get_embedding_model_name()
+        self.device = get_embedding_device()
         self.batch_size = batch_size
         self._model = None
         self._client = None
 
-        logger.info("Embedding client initialized with model: %s", self.model_name)
+        logger.info(
+            "Embedding client initialized with model: %s on device: %s",
+            self.model_name,
+            self.device,
+        )
 
     def _is_openai(self) -> bool:
         """Check if using OpenAI API backend."""
@@ -84,8 +126,8 @@ class EmbeddingClient:
             # Strip the prefix if it's a sentence-transformers model
             if "/" in model_path and not model_path.startswith("/"):
                 pass  # Use full HuggingFace path
-            logger.info("Loading local model: %s", model_path)
-            self._model = SentenceTransformer(model_path)
+            logger.info("Loading local model: %s on device: %s", model_path, self.device)
+            self._model = SentenceTransformer(model_path, device=self.device)
             logger.info("Model loaded successfully.")
         return self._model
 
@@ -104,11 +146,16 @@ class EmbeddingClient:
             logger.info("OpenAI client initialized.")
         return self._client
 
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+    def embed_texts(
+        self,
+        texts: List[str],
+        purpose: str = "passage",
+    ) -> List[List[float]]:
         """Embed a list of texts with automatic batching and retry.
 
         Args:
             texts: List of text strings to embed.
+            purpose: One of "query" or "passage".
 
         Returns:
             List of embedding vectors (list of floats).
@@ -116,12 +163,17 @@ class EmbeddingClient:
         if not texts:
             return []
 
+        prepared_texts = prepare_embedding_texts(
+            texts,
+            model_name=self.model_name,
+            purpose=purpose,
+        )
         all_embeddings: List[List[float]] = []
 
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i : i + self.batch_size]
+        for i in range(0, len(prepared_texts), self.batch_size):
+            batch = prepared_texts[i : i + self.batch_size]
             batch_num = i // self.batch_size + 1
-            total_batches = (len(texts) + self.batch_size - 1) // self.batch_size
+            total_batches = (len(prepared_texts) + self.batch_size - 1) // self.batch_size
 
             embeddings = self._embed_batch_with_retry(batch)
             all_embeddings.extend(embeddings)
@@ -183,7 +235,11 @@ class EmbeddingClient:
             List of embedding vectors.
         """
         model = self._load_local_model()
-        embeddings = model.encode(texts, show_progress_bar=False)
+        embeddings = model.encode(
+            texts,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+        )
         return [emb.tolist() for emb in embeddings]
 
     def _embed_openai(self, texts: List[str]) -> List[List[float]]:

@@ -62,10 +62,34 @@ def get_docs_fields(dim: int = None) -> list:
             description="H2/H3 heading this chunk belongs to",
         ),
         FieldSchema(
+            name="parent_heading",
+            dtype=DataType.VARCHAR,
+            max_length=256,
+            description="Nearest parent heading above this chunk",
+        ),
+        FieldSchema(
+            name="heading_path",
+            dtype=DataType.VARCHAR,
+            max_length=512,
+            description="Full heading hierarchy path for this chunk",
+        ),
+        FieldSchema(
+            name="breadcrumb_path",
+            dtype=DataType.VARCHAR,
+            max_length=256,
+            description="URL-derived breadcrumb path for this page",
+        ),
+        FieldSchema(
             name="section",
             dtype=DataType.VARCHAR,
             max_length=128,
             description="Top-level docs section (e.g., components, started)",
+        ),
+        FieldSchema(
+            name="chunk_type",
+            dtype=DataType.VARCHAR,
+            max_length=32,
+            description="Chunk intent type such as concept, procedure, command, or faq",
         ),
         FieldSchema(
             name="chunk_text",

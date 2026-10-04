@@ -750,7 +750,7 @@ def load_code(
 def code_ingestion_pipeline(
     repo_url: str = "https://github.com/kubeflow/manifests",
     branch: str = "master",
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    embedding_model: str = "BAAI/bge-base-en-v1.5",
     milvus_host: str = "localhost",
     milvus_port: str = "19530",
     collection_name: str = "code_collection",
@@ -801,7 +801,7 @@ if docs_ingestion_pipeline is not None:
         code_repo_url: str = "https://github.com/kubeflow/manifests",
         code_branch: str = "master",
         # Shared params
-        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_model: str = "BAAI/bge-base-en-v1.5",
         milvus_host: str = "localhost",
         milvus_port: str = "19530",
         embedding_dim: int = 384,

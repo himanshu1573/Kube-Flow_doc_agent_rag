@@ -42,7 +42,7 @@ def embed_code_chunks(
     texts = [chunk["chunk_text"] for chunk in chunks]
 
     logger.info("Embedding %d code chunks with model: %s", len(texts), client.model_name)
-    embeddings = client.embed_texts(texts)
+    embeddings = client.embed_texts(texts, purpose="passage")
 
     for chunk, embedding in zip(chunks, embeddings):
         chunk["embedding"] = embedding

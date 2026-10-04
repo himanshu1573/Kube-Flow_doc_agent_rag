@@ -28,7 +28,7 @@ except ImportError:
     def count_tokens(text: str) -> int:
         return int(len(text.split()) * 1.3)
 
-MIN_TOKENS = 50
+MIN_TOKENS = 20
 MAX_TOKENS = 512
 
 
@@ -91,7 +91,8 @@ def split_oversized_chunk(text: str, max_tokens: int) -> List[str]:
     if count_tokens(text) <= max_tokens:
         return [text]
 
-    # Try blank line split first
+    # Try blank line and line split first, but only accept the split if it
+    # actually keeps every produced sub-chunk within the token budget.
     for sep in ["\n\n", "\n"]:
         parts = text.split(sep)
         if len(parts) <= 1:
@@ -112,7 +113,7 @@ def split_oversized_chunk(text: str, max_tokens: int) -> List[str]:
         if current.strip():
             chunks.append(current.strip())
 
-        if len(chunks) > 1:
+        if len(chunks) > 1 and all(count_tokens(chunk) <= max_tokens for chunk in chunks):
             return chunks
 
     # Last resort: word split

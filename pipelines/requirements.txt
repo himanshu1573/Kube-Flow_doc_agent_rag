@@ -7,3 +7,6 @@ torch
 feast[milvus]
 pandas
 numpy
+pymilvus
+PyYAML
+tiktoken

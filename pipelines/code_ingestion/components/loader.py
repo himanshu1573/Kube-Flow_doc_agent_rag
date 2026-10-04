@@ -77,6 +77,7 @@ def load_to_milvus(
             "file_path": str(chunk.get("file_path", ""))[:512],
             "extension": str(chunk.get("extension", ""))[:16],
             "language": str(chunk.get("language", ""))[:32],
+            "chunk_type": str(chunk.get("chunk_type", "symbol"))[:32],
             "symbol_name": str(chunk.get("symbol_name", ""))[:256],
             "folder_context": str(chunk.get("folder_context", ""))[:128],
             "chunk_text": str(chunk.get("chunk_text", ""))[:8192],

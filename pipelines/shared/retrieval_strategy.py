@@ -9,7 +9,9 @@ This module adds lightweight hybrid-retrieval behavior on top of vector search:
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from typing import Dict, Iterable, List
 
 PATH_ALIAS_HINTS = {
@@ -189,6 +191,11 @@ CODE_INTENT_TERMS = {
     "kustomization",
     "dockerfile",
     "helm",
+    "code",
+    "snippet",
+    "snippets",
+    "example",
+    "examples",
 }
 
 # Stronger signal terms that definitively mean the user wants code/manifest
@@ -213,7 +220,31 @@ DOCS_INTENT_TERMS = {
     "concept",
     "architecture",
     "tutorial",
+    "install",
+    "installation",
 }
+
+QUERY_TYPE_PATTERNS = {
+    "compare": re.compile(r"\b(compare|difference between|vs\.?|versus)\b", re.IGNORECASE),
+    "install": re.compile(r"\b(install|installation|set up|setup|deploy|get started)\b", re.IGNORECASE),
+    "how_to": re.compile(r"\b(how to|how do i|how can i|step by step)\b", re.IGNORECASE),
+    "definition": re.compile(r"\b(what is|what are|explain|overview|introduction)\b", re.IGNORECASE),
+}
+CODE_REQUEST_PATTERNS = (
+    "give me code",
+    "show me code",
+    "yaml",
+    "show yaml",
+    "give yaml",
+    "manifest",
+    "snippet",
+    "code example",
+    "example yaml",
+    "install command",
+    "kubectl",
+    "helm",
+    "kustomize",
+)
 
 
 def split_terms(value: str) -> List[str]:
@@ -257,12 +288,26 @@ def analyze_query(question: str) -> Dict[str, object]:
             expanded_terms.extend(additions)
 
     question_terms = set(split_terms(question))
-    prefer_code = bool(question_terms & CODE_INTENT_TERMS)
-    # If any strong code term is present, strongly prefer code.
+    query_type = "general"
+    for candidate_type, pattern in QUERY_TYPE_PATTERNS.items():
+        if pattern.search(question):
+            query_type = candidate_type
+            break
+
+    wants_code_examples = any(pattern in lowered for pattern in CODE_REQUEST_PATTERNS)
+    wants_steps = "step by step" in lowered or query_type in {"install", "how_to"}
+    wants_commands = bool(COMMAND_PATTERNS := {"kubectl", "helm", "kustomize", "curl", "docker"} & question_terms)
+
+    prefer_code = bool(question_terms & CODE_INTENT_TERMS) or wants_code_examples or wants_commands
     strongly_prefer_code = bool(
         question_terms & STRONG_CODE_TERMS
     ) or any(term in lowered for term in STRONG_CODE_TERMS)
-    prefer_docs = not prefer_code and bool(question_terms & DOCS_INTENT_TERMS)
+    prefer_docs = bool(question_terms & DOCS_INTENT_TERMS) or query_type in {
+        "definition",
+        "install",
+        "how_to",
+        "compare",
+    }
 
     priority_terms = unique_terms(expanded_terms, limit=28)
     enhanced_query = question
@@ -276,10 +321,71 @@ def analyze_query(question: str) -> Dict[str, object]:
         "question": question,
         "enhanced_query": enhanced_query,
         "priority_terms": priority_terms,
+        "query_type": query_type,
+        "wants_code_examples": wants_code_examples,
+        "wants_steps": wants_steps,
+        "wants_commands": wants_commands,
         "prefer_code": prefer_code,
         "strongly_prefer_code": strongly_prefer_code,
         "prefer_docs": prefer_docs,
     }
+
+
+def lexical_candidate_scores(
+    hits: List[Dict[str, object]],
+    query_terms: List[str],
+) -> List[float]:
+    """Compute a BM25-style lexical score over retrieved candidates."""
+    if not hits or not query_terms:
+        return [0.0 for _ in hits]
+
+    doc_terms: List[List[str]] = []
+    doc_lengths: List[int] = []
+    doc_freq: Counter[str] = Counter()
+
+    for hit in hits:
+        haystack = " ".join(
+            [
+                str(hit.get("source_url", "")),
+                str(hit.get("file_path", "")),
+                str(hit.get("symbol_name", "")),
+                str(hit.get("heading", "")),
+                str(hit.get("parent_heading", "")),
+                str(hit.get("heading_path", "")),
+                str(hit.get("chunk_type", "")),
+                str(hit.get("chunk_text", "")),
+            ]
+        )
+        terms = split_terms(haystack)
+        doc_terms.append(terms)
+        doc_lengths.append(max(1, len(terms)))
+        for term in set(terms):
+            doc_freq[term] += 1
+
+    avg_len = sum(doc_lengths) / max(1, len(doc_lengths))
+    k1 = 1.2
+    b = 0.75
+    total_docs = len(hits)
+    scores: List[float] = []
+
+    for terms, doc_len in zip(doc_terms, doc_lengths):
+        tf = Counter(terms)
+        score = 0.0
+        for term in query_terms:
+            freq = tf.get(term, 0)
+            if freq == 0:
+                continue
+            df = doc_freq.get(term, 0)
+            idf = math.log(1 + (total_docs - df + 0.5) / (df + 0.5))
+            numerator = freq * (k1 + 1)
+            denominator = freq + k1 * (1 - b + b * (doc_len / avg_len))
+            score += idf * (numerator / denominator)
+        scores.append(score)
+
+    max_score = max(scores) if scores else 0.0
+    if max_score <= 0:
+        return [0.0 for _ in scores]
+    return [score / max_score for score in scores]
 
 
 def rerank_hits(
@@ -288,23 +394,31 @@ def rerank_hits(
     top_k: int,
 ) -> List[Dict[str, object]]:
     """Rerank candidate hits with lightweight hybrid-retrieval heuristics."""
-    priority_terms = set(query_analysis.get("priority_terms", []))
+    priority_terms_list = list(query_analysis.get("priority_terms", []))
+    priority_terms = set(priority_terms_list)
     prefer_code = bool(query_analysis.get("prefer_code"))
     strongly_prefer_code = bool(query_analysis.get("strongly_prefer_code"))
     prefer_docs = bool(query_analysis.get("prefer_docs"))
     question_lower = str(query_analysis.get("question", "")).lower()
+    query_type = str(query_analysis.get("query_type", "general"))
+    wants_code_examples = bool(query_analysis.get("wants_code_examples"))
+    wants_steps = bool(query_analysis.get("wants_steps"))
+    wants_commands = bool(query_analysis.get("wants_commands"))
 
     reranked: List[Dict[str, object]] = []
+    lexical_scores = lexical_candidate_scores(hits, priority_terms_list)
 
-    for hit in hits:
+    for hit, lexical_score in zip(hits, lexical_scores):
         score = float(hit.get("distance", 0.0))
         collection = str(hit.get("collection", ""))
         source = str(hit.get("source_url") or hit.get("file_path") or "")
         symbol_name = str(hit.get("symbol_name", ""))
         heading = str(hit.get("heading", ""))
+        parent_heading = str(hit.get("parent_heading", ""))
         text = str(hit.get("chunk_text", ""))
+        chunk_type = str(hit.get("chunk_type", ""))
 
-        haystack = " ".join([source, symbol_name, heading, text]).lower()
+        haystack = " ".join([source, symbol_name, heading, parent_heading, chunk_type, text]).lower()
         haystack_terms = set(split_terms(haystack))
         path_aliases = set(source_alias_terms(source))
 
@@ -332,6 +446,21 @@ def rerank_hits(
         alias_overlap = len(priority_terms & path_aliases)
         score += min(0.16, 0.014 * term_overlap)
         score += min(0.10, 0.025 * alias_overlap)
+        score += 0.24 * lexical_score
+
+        # --- Chunk-type preference ---
+        if collection == "docs_collection":
+            if query_type == "definition" and chunk_type in {"concept", "faq"}:
+                score += 0.08
+            if wants_steps and chunk_type == "procedure":
+                score += 0.12
+            if wants_commands and chunk_type == "command":
+                score += 0.14
+        if collection == "code_collection":
+            if wants_code_examples and chunk_type in {"manifest", "symbol"}:
+                score += 0.14
+            if wants_commands and chunk_type == "manifest":
+                score += 0.12
 
         # --- Path-keyword boosting ---
         # Extract meaningful keywords from the query and boost hits whose
@@ -345,6 +474,13 @@ def rerank_hits(
         for kw in path_keywords:
             if kw in question_lower and kw in source_lower:
                 score += 0.06
+
+        if query_type == "install" and (
+            "install" in source_lower or "install" in heading.lower() or "getting started" in heading.lower()
+        ):
+            score += 0.10
+        if query_type == "compare" and "overview" in heading.lower():
+            score += 0.04
 
         if prefer_code and source.endswith((".yaml", ".yml")):
             score += 0.02

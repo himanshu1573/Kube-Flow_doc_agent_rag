@@ -62,6 +62,12 @@ def get_code_fields(dim: int = None) -> list:
             description="Programming language (python, go, yaml, markdown)",
         ),
         FieldSchema(
+            name="chunk_type",
+            dtype=DataType.VARCHAR,
+            max_length=32,
+            description="Chunk type such as symbol, manifest, or doc",
+        ),
+        FieldSchema(
             name="symbol_name",
             dtype=DataType.VARCHAR,
             max_length=256,

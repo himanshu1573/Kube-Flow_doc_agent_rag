@@ -31,8 +31,8 @@ SKIP_DIRS = {
 
 SUPPORTED_EXTENSIONS = {".py", ".go", ".yaml", ".yml", ".md"}
 
-MIN_FILE_SIZE = 200       # bytes
-MAX_FILE_SIZE = 100_000   # 100KB
+MIN_FILE_SIZE = 50        # bytes (more inclusive)
+MAX_FILE_SIZE = 500_000   # 500KB (include larger manifests)
 
 
 def get_repo_url() -> str:
@@ -146,7 +146,11 @@ def collect_files(repo_dir: str) -> List[Dict[str, Any]]:
             except OSError:
                 continue
 
-            if size < MIN_FILE_SIZE or size > MAX_FILE_SIZE:
+            if size < MIN_FILE_SIZE:
+                logger.debug("Skipping %s: too small (%d bytes)", rel_path, size)
+                continue
+            if size > MAX_FILE_SIZE:
+                logger.info("Skipping %s: too large (%d bytes)", rel_path, size)
                 continue
 
             # Determine folder context (top-level directory)
