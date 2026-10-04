@@ -147,11 +147,27 @@ class ServerToolCallTests(unittest.TestCase):
         self.assertEqual(answer, "Recovered.")
         self.assertEqual(len(llm.requests), 2)
 
+    def test_rate_limit_is_retried_up_to_configured_attempts(self):
+        rate_limited = json.dumps({"error": {"code": "rate_limit_exceeded"}})
+        llm = FakeLLM(
+            [
+                (429, rate_limited, {"retry-after": "0"}),
+                (429, rate_limited, {"retry-after": "0"}),
+                (200, sse(content("Third time lucky."), finish("stop")), {}),
+            ]
+        )
+
+        with mock.patch.object(self.app, "LLM_RATE_LIMIT_RETRIES", 2):
+            answer, _ = self.run_chat(llm)
+
+        self.assertEqual(answer, "Third time lucky.")
+        self.assertEqual(len(llm.requests), 3)
+
     def test_chat_endpoint_returns_429_when_llm_stays_rate_limited(self):
         from fastapi.testclient import TestClient
 
         rate_limited = json.dumps({"error": {"code": "rate_limit_exceeded"}})
-        llm = FakeLLM([(429, rate_limited, {"retry-after": "0"})] * 2)
+        llm = FakeLLM([(429, rate_limited, {"retry-after": "0"})] * (self.app.LLM_RATE_LIMIT_RETRIES + 1))
         real_client = httpx.AsyncClient
         with mock.patch.object(self.app.httpx, "AsyncClient", llm.client_factory(real_client)):
             response = TestClient(self.app.app).post(

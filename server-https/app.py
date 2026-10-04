@@ -28,6 +28,7 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 LLM_FOLLOWUP_MAX_TOKENS = int(os.getenv("LLM_FOLLOWUP_MAX_TOKENS", "1000"))
 # Upper bound in seconds for honoring an upstream Retry-After header on HTTP 429.
 LLM_MAX_RETRY_WAIT = float(os.getenv("LLM_MAX_RETRY_WAIT", "10"))
+LLM_RATE_LIMIT_RETRIES = int(os.getenv("LLM_RATE_LIMIT_RETRIES", "2"))
 # Bring-your-own-key: clients may send their own key for the configured LLM endpoint
 # (X-LLM-API-Key) and optionally a model (X-LLM-Model). Keys are used for that request
 # only and are never logged or stored. Set REQUIRE_CLIENT_API_KEY=true on public
@@ -158,7 +159,7 @@ async def stream_llm_response(
                 if response.status_code != 200:
                     error_body = (await response.aread()).decode("utf-8", "replace")[:500]
                     print(f"[ERROR] LLM HTTP {response.status_code}: {error_body}")
-                    if response.status_code == 429 and retry_count < 1:
+                    if response.status_code == 429 and retry_count < LLM_RATE_LIMIT_RETRIES:
                         await asyncio.sleep(retry_wait_seconds(response.headers.get("retry-after")))
                         async for retry_chunk in stream_llm_response(
                             payload,
