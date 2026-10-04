@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -131,6 +132,24 @@ def classify_question(question: str) -> RouteDecision:
         route_hint=route_hint,
         query_analysis=analysis,
     )
+
+
+ANSWER_STEP_INSTRUCTIONS = """
+Answering
+- Retrieval is already done; the results are in the conversation.
+- Answer from that context only. Do not call or mention tools.
+- Cite the URLs you used.
+""".strip()
+
+
+def build_answer_system_prompt(system_prompt: str) -> str:
+    """Turn the routed system prompt into one for the final answer step.
+
+    The tool-use instructions are replaced, because models that see them
+    keep trying to call tools after retrieval has finished.
+    """
+    without_tools = re.sub(r"\nTool Use\n.*?(?=\nStyle\n)", "\n", system_prompt, flags=re.S)
+    return f"{without_tools.strip()}\n\n{ANSWER_STEP_INSTRUCTIONS}"
 
 
 def build_system_prompt(route_decision: RouteDecision) -> str:

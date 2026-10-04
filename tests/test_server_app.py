@@ -121,19 +121,15 @@ class ServerToolCallTests(unittest.TestCase):
             ["https://example.com/search_kubeflow_docs", "https://example.com/search_kubeflow_code"],
         )
 
-        follow_up = llm.requests[1]["messages"]
-        assistant_turn = follow_up[-3]
-        self.assertEqual(assistant_turn["role"], "assistant")
-        self.assertEqual(
-            [call["id"] for call in assistant_turn["tool_calls"]], ["call_docs", "call_code"]
-        )
-        tool_turns = follow_up[-2:]
-        self.assertEqual([turn["role"] for turn in tool_turns], ["tool", "tool"])
-        self.assertEqual(
-            [turn["tool_call_id"] for turn in tool_turns], ["call_docs", "call_code"]
-        )
+        follow_up = llm.requests[1]
+        self.assertNotIn("tools", follow_up)
+        context_turn = follow_up["messages"][-1]
+        self.assertEqual(context_turn["role"], "user")
+        self.assertIn("results for search_kubeflow_docs", context_turn["content"])
+        self.assertIn("results for search_kubeflow_code", context_turn["content"])
+        self.assertFalse(any(m.get("role") == "tool" or m.get("tool_calls") for m in follow_up["messages"]))
 
-    def test_follow_up_forbids_tools_and_never_loops_on_tool_use_failed(self):
+    def test_answer_step_offers_no_tools_and_never_loops_on_tool_use_failed(self):
         tool_use_failed = {"error": {"code": "tool_use_failed", "message": "model tried to call a tool"}}
         llm = FakeLLM(
             [
@@ -153,9 +149,7 @@ class ServerToolCallTests(unittest.TestCase):
             self.run_chat(llm)
 
         self.assertEqual(len(llm.requests), 2, "tool_use_failed in the answer step must not loop")
-        follow_up = llm.requests[1]
-        self.assertEqual(follow_up["tool_choice"], "none")
-        self.assertEqual(follow_up["tools"], self.payload["tools"])
+        self.assertNotIn("tools", llm.requests[1])
 
     def test_rate_limit_is_retried_after_retry_after(self):
         rate_limited = json.dumps({"error": {"code": "rate_limit_exceeded"}})

@@ -13,7 +13,7 @@ import uvicorn
 from typing import Dict, Any, List, Optional, AsyncGenerator, Tuple
 
 from agent.core.retriever import build_tools_for_route, execute_tool_call
-from agent.core.router import build_system_prompt, classify_question
+from agent.core.router import build_answer_system_prompt, build_system_prompt, classify_question
 from agent.core.state import THREAD_STORE
 
 # Config
@@ -198,9 +198,9 @@ async def stream_llm_response(
                             code = error.get("code")
                             failed_generation = error.get("failed_generation", "")
 
-                            # Fall back to direct retrieval only on the tool-selection call. On the
-                            # answer step (tool_choice "none") another retrieval round would loop.
-                            if code == "tool_use_failed" and payload.get("tools") and payload.get("tool_choice") != "none":
+                            # Fall back to direct retrieval only on the tool-selection call (the one
+                            # that offers tools). On the answer step it would start another round.
+                            if code == "tool_use_failed" and payload.get("tools"):
                                 fallback_tool_call = build_fallback_tool_call(payload)
                                 if fallback_tool_call is None:
                                     yield f"data: {json.dumps({'type': 'error', 'content': 'Tool call fallback could not determine the user query.'})}\n\n"
@@ -341,35 +341,33 @@ async def handle_tool_follow_up(
     try:
         print(f"[TOOL] Handling follow-up request with {len(tool_results)} tool results")
 
-        # Create messages with tool call and result
+        # Answer step: hand the retrieved results to the model as plain context,
+        # with no tool definitions and no tool-call history. Models such as
+        # gpt-oss keep emitting tool calls when they see earlier tool calls,
+        # even with tool_choice "none", which the provider rejects.
+        context_blocks = [
+            f"### {tool_call['function']['name']} {tool_call['function'].get('arguments', '')}\n{tool_result}"
+            for tool_call, tool_result in tool_results
+        ]
         messages = original_payload["messages"].copy()
-
-        # One assistant turn carrying every tool call, as the OpenAI API expects
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": build_answer_system_prompt(messages[0]["content"])}
         messages.append({
-            "role": "assistant",
-            "tool_calls": [tool_call for tool_call, _ in tool_results]
+            "role": "user",
+            "content": (
+                "Retrieved Kubeflow context for my question above:\n\n"
+                + "\n\n".join(context_blocks)
+                + "\n\nAnswer my question using this context and cite the URLs you used. "
+                "Do not call any tools."
+            ),
         })
 
-        # One tool message per call, matched by tool_call_id
-        for tool_call, tool_result in tool_results:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call["id"],
-                "content": tool_result
-            })
-        
-        # Answer step: keep the tool definitions (models such as gpt-oss emit tool calls
-        # anyway when they are missing) but forbid using them with tool_choice "none".
         follow_up_payload = {
             "model": original_payload["model"],
             "messages": messages,
-            "tools": original_payload.get("tools", []),
-            "tool_choice": "none",
             "stream": True,
             "max_tokens": LLM_FOLLOWUP_MAX_TOKENS
         }
-        if not follow_up_payload["tools"]:
-            del follow_up_payload["tools"], follow_up_payload["tool_choice"]
         
         # Stream the follow-up response
         async for chunk in stream_llm_response(

@@ -1,7 +1,7 @@
 import unittest
 
 from agent.core.retriever import build_code_citation_url
-from agent.core.router import build_system_prompt, classify_question
+from agent.core.router import build_answer_system_prompt, build_system_prompt, classify_question
 
 
 class Phase2RouterTests(unittest.TestCase):
@@ -26,6 +26,17 @@ class Phase2RouterTests(unittest.TestCase):
     def test_code_citation_url_uses_line_anchor(self):
         url = build_code_citation_url("apps/example/deployment.yaml", 42)
         self.assertTrue(url.endswith("apps/example/deployment.yaml#L42"))
+
+    def test_answer_prompt_drops_tool_instructions_but_keeps_route_and_style(self):
+        routed = build_system_prompt(classify_question("What is Kubeflow Pipelines?"))
+        answer = build_answer_system_prompt(routed)
+
+        self.assertIn("search_kubeflow_context", routed)
+        self.assertNotIn("search_kubeflow_context", answer)
+        self.assertNotIn("Tool Use", answer)
+        self.assertIn("Router decision:", answer)
+        self.assertIn("Style", answer)
+        self.assertIn("Do not call or mention tools", answer)
 
 
 if __name__ == "__main__":

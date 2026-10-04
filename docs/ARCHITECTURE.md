@@ -112,7 +112,7 @@ sequenceDiagram
         A->>M: search (over-fetch 4×top_k) → rerank → top_k
         A-->>W: SSE {type: tool_result}
     end
-    A->>L: call 2: all tool_calls + all tool results (max LLM_FOLLOWUP_MAX_TOKENS)
+    A->>L: call 2: answer-only system prompt + all results as context, no tools (max LLM_FOLLOWUP_MAX_TOKENS)
     L-->>A: streamed answer
     A-->>W: SSE {type: content} … {type: citations} {type: done}
     A->>S: append assistant answer
@@ -134,9 +134,18 @@ preference, priority-term overlap, path-alias overlap and a lexical score. Then 
 Code citations are GitHub URLs with line anchors (`…/blob/master/<path>#L<start>`).
 
 **LLM contract:** any OpenAI-compatible `/chat/completions` endpoint that supports streaming and
-`tools`. The answer always takes exactly two LLM calls: one turn to choose tools, then one
-follow-up with every tool result. If the model emits malformed tool JSON (`tool_use_failed`), the
-API falls back to a direct retrieval call with the user's question.
+`tools`. Every answer takes exactly two LLM calls:
+
+1. **Tool selection:** real OpenAI-style tool calling, with route-scoped tools.
+2. **Answer:** one follow-up that receives every tool result as plain context in a user message.
+   It gets no tool definitions, no tool-call history, and a system prompt with the tool-use
+   instructions removed (`build_answer_system_prompt`).
+
+Step 2 is built this way because some models (for example `gpt-oss-20b` on Groq) keep emitting
+tool calls when they see earlier tool calls or tool instructions, even with `tool_choice: "none"`.
+The provider then rejects them with `tool_use_failed`. If the *tool-selection* call returns
+malformed tool JSON, the API falls back to a direct retrieval with the user's question. That
+fallback is never used on the answer step, so a turn cannot loop.
 
 **Errors:** an upstream 429 is retried up to `LLM_RATE_LIMIT_RETRIES` times (default 2). Each wait
 honors `Retry-After`, capped by `LLM_MAX_RETRY_WAIT`. Non-streaming `/chat` returns 429 for rate
@@ -192,8 +201,9 @@ flowchart LR
 
 - **CORS is `*`** and there is no auth or rate limiting on `/chat`. Restrict both before production.
   Serve the API over HTTPS only, because client keys travel in request headers.
-- **The widget renders model output as Markdown with `marked` and no HTML sanitizer.** Add
-  DOMPurify before exposing it publicly.
+- **Widget Markdown:** model output is rendered with `marked` and sanitized with DOMPurify, both
+  loaded from jsDelivr. If either fails to load, the widget shows escaped plain text. For strict
+  CSP deployments, self-host both files.
 - **Thread state is in-memory**, as described in section 7.
 - **The router and reranker are heuristic.** No retrieval-quality benchmark gates changes yet.
 - **Free-tier LLMs:** set `LLM_MAX_TOKENS` / `LLM_FOLLOWUP_MAX_TOKENS` low, and expect occasional 429s.

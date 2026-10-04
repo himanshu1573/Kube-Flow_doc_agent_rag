@@ -12,8 +12,9 @@
   - the widget stores them in `sessionStorage` only, never `localStorage` or cookies
 - Do not hard-code project IDs, public IPs or personal paths. Use placeholders such as
   `<PROJECT_ID>`, `<API_DOMAIN>` and `<REGISTRY>`.
-- Model output is rendered with `marked` in the widget. Do not add new `innerHTML` sinks for
-  untrusted data; use `textContent` for server-provided strings.
+- The widget renders model output only through `renderMarkdown()` (marked + DOMPurify, with an
+  escaped-text fallback). Never assign model or server strings to `innerHTML` directly; use
+  `textContent`. Chat history is persisted as data (`kf-chat-v2`), never as HTML.
 
 ## Invariants (breaking these breaks retrieval or the API contract)
 
@@ -23,8 +24,11 @@
 - Collection schemas live in `backend/schemas/`. Changing fields requires recreating the
   collections and updating `agent/core/retriever.py` output fields.
 - `chunk_id` must stay deterministic. Loaders upsert by it, so re-runs must not duplicate data.
-- One user turn makes at most **two** LLM calls: tool selection, then a single follow-up carrying
-  every tool call and result (`server-https/app.py`). Do not reintroduce a follow-up per tool.
+- One user turn makes at most **two** LLM calls: tool selection, then a single answer call that
+  gets all results as plain context, with no tools and the answer-only system prompt
+  (`server-https/app.py`, `build_answer_system_prompt`). Do not reintroduce a follow-up per tool,
+  tool definitions in the answer step, or the `tool_use_failed` fallback on the answer step
+  (it loops).
 - SSE event types (`thread`, `tool_result`, `content`, `citations`, `error`, `done`) are a contract
   with both widgets. Add fields if needed, but do not rename events.
 - Error status mapping for non-streaming `/chat`: 400 malformed headers, 401 key missing or
