@@ -5,7 +5,7 @@ RUN useradd -m -u 1000 appuser
 WORKDIR /app
 
 # Install deps
-COPY requirements.txt ./
+COPY server/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Writable caches for HF/Transformers/Sentence-Transformers
@@ -22,8 +22,11 @@ RUN mkdir -p $HF_HOME $SENTENCE_TRANSFORMERS_HOME $XDG_CACHE_HOME && \
 # Switch to non-root before running the app
 USER appuser
 
-# App
-COPY app.py /app/
+# App and shared runtime packages
+COPY server/app.py /app/
+COPY agent /app/agent
+COPY pipelines /app/pipelines
+COPY backend /app/backend
 
 EXPOSE 8000
 CMD ["python", "-u", "app.py"]

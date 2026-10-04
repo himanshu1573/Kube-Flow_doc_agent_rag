@@ -4,5 +4,6 @@ pydantic
 httpx
 sentence-transformers
 pymilvus
+marshmallow<4
 torch --extra-index-url https://download.pytorch.org/whl/cpu
 numpy

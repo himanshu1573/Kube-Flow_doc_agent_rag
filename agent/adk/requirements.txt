@@ -1,0 +1,4 @@
+google-adk
+sentence-transformers
+pymilvus
+marshmallow<4

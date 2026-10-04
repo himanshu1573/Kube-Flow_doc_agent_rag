@@ -4,6 +4,7 @@ httpx
 
 # Milvus client
 pymilvus
+marshmallow<4
 
 # Optimized ML dependencies - use lighter alternatives
 sentence-transformers
