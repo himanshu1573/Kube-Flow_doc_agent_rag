@@ -198,7 +198,9 @@ async def stream_llm_response(
                             code = error.get("code")
                             failed_generation = error.get("failed_generation", "")
 
-                            if code == "tool_use_failed":
+                            # Fall back to direct retrieval only on the tool-selection call. On the
+                            # answer step (tool_choice "none") another retrieval round would loop.
+                            if code == "tool_use_failed" and payload.get("tools") and payload.get("tool_choice") != "none":
                                 fallback_tool_call = build_fallback_tool_call(payload)
                                 if fallback_tool_call is None:
                                     yield f"data: {json.dumps({'type': 'error', 'content': 'Tool call fallback could not determine the user query.'})}\n\n"
@@ -356,13 +358,18 @@ async def handle_tool_follow_up(
                 "content": tool_result
             })
         
-        # Create follow-up payload - remove tools to get final response
+        # Answer step: keep the tool definitions (models such as gpt-oss emit tool calls
+        # anyway when they are missing) but forbid using them with tool_choice "none".
         follow_up_payload = {
             "model": original_payload["model"],
             "messages": messages,
+            "tools": original_payload.get("tools", []),
+            "tool_choice": "none",
             "stream": True,
             "max_tokens": LLM_FOLLOWUP_MAX_TOKENS
         }
+        if not follow_up_payload["tools"]:
+            del follow_up_payload["tools"], follow_up_payload["tool_choice"]
         
         # Stream the follow-up response
         async for chunk in stream_llm_response(

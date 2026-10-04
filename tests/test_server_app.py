@@ -133,6 +133,30 @@ class ServerToolCallTests(unittest.TestCase):
             [turn["tool_call_id"] for turn in tool_turns], ["call_docs", "call_code"]
         )
 
+    def test_follow_up_forbids_tools_and_never_loops_on_tool_use_failed(self):
+        tool_use_failed = {"error": {"code": "tool_use_failed", "message": "model tried to call a tool"}}
+        llm = FakeLLM(
+            [
+                (200, sse(
+                    tool_call_delta(0, "call_docs", "search_kubeflow_docs", "kserve"),
+                    finish("tool_calls"),
+                ), {}),
+                # The answer step misbehaves; it must not trigger another retrieval round.
+                (200, sse(tool_use_failed), {}),
+                (200, sse(tool_use_failed), {}),
+                (200, sse(tool_use_failed), {}),
+            ]
+        )
+        self.payload["tools"] = [{"type": "function", "function": {"name": "search_kubeflow_docs"}}]
+
+        with self.assertRaises(Exception):
+            self.run_chat(llm)
+
+        self.assertEqual(len(llm.requests), 2, "tool_use_failed in the answer step must not loop")
+        follow_up = llm.requests[1]
+        self.assertEqual(follow_up["tool_choice"], "none")
+        self.assertEqual(follow_up["tools"], self.payload["tools"])
+
     def test_rate_limit_is_retried_after_retry_after(self):
         rate_limited = json.dumps({"error": {"code": "rate_limit_exceeded"}})
         llm = FakeLLM(
