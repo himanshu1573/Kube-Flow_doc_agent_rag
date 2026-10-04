@@ -4,6 +4,19 @@ These files add the chat assistant to the [kubeflow/website](https://github.com/
 Hugo site. Every page then gets a floating "Kubeflow Agent" button. It streams answers from
 the agent API (`server-https/app.py`) and sends the current page title and path as context.
 
+**What users get**
+
+- an "Ask AI" launcher (⌘I / Ctrl+I) that opens a resizable side panel, with Esc to close, a wide
+  mode, and full screen on mobile
+- an empty state with suggestions, including "Summarize this page"
+- live agent steps from the API's SSE events (routing → searches with result counts → writing),
+  collapsed into a summary once the answer is done
+- streaming Markdown answers, sanitized with DOMPurify, with code blocks that have a **Copy** button
+- numbered source cards (docs breadcrumbs, GitHub file + line), **Copy** / **Regenerate**, and
+  **Stop** while generating
+- light and dark themes that follow the site's theme switch (`html[data-theme]`) or the OS setting
+- chat history saved per browser as data, never as HTML
+
 ```
 website/
 ├── static/js/agent-widget.js          # widget (vanilla JS, SSE streaming, thread persistence)

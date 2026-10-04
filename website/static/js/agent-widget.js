@@ -1,9 +1,18 @@
 /* ============================================================
-   Kubeflow Docs Agent — Chat Widget (Vanilla JS)
-   Connects to the agent FastAPI backend (server-https) via SSE streaming.
+   Kubeflow Docs Agent — Chat Widget (vanilla JS, no build step)
+   Streams answers from the agent API (server-https) over SSE.
+
+   Contract with the API:
+     POST {API_URL}  body {message, stream, thread_id, context}
+                     headers X-LLM-API-Key / X-LLM-Model (optional, bring-your-own-key)
+     SSE events: thread, tool_result, content, citations, error, done
+     GET  {CONFIG_URL} key policy + provider host
    ============================================================ */
 (function () {
   "use strict";
+
+  if (window.__kfAgentWidgetLoaded) return;
+  window.__kfAgentWidgetLoaded = true;
 
   // --- Config --------------------------------------------------
   function resolveApiUrl() {
@@ -27,179 +36,64 @@
 
   const API_URL = resolveApiUrl();
   const CONFIG_URL = API_URL.replace(/\/chat\/?$/, "/config");
-  const MARKED_CDN = "https://cdn.jsdelivr.net/npm/marked/marked.min.js";
+  const MARKED_CDN = "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js";
+  const PURIFY_CDN = "https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js";
 
-  // ── State ───────────────────────────────────────────────────
-  let isOpen = false;
-  let threadId = null;
-
-  // ── SVG Icons ───────────────────────────────────────────────
-  const ICON = {
-    chat: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-    close: '<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-    bot: '<svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>',
-    user: '<svg viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
-    sparkle: '<svg viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>',
-    send: '<svg viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
-    plus: '<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-    key: '<svg viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>',
+  const STORE = {
+    thread: "kf-thread-id",
+    messages: "kf-chat-v2",
+    legacyMessages: "kf-messages",
+    open: "kf-panel-open",
+    width: "kf-panel-width",
+    wide: "kf-panel-wide",
   };
-
-  // --- Build DOM -------------------------------------------------
-  function init() {
-    // Floating button
-    const btn = document.createElement("button");
-    btn.id = "kf-agent-btn";
-    btn.innerHTML = ICON.chat;
-    btn.setAttribute("aria-label", "Open AI Assistant");
-    btn.addEventListener("click", () => toggle());
-    document.body.appendChild(btn);
-
-    // Side panel
-    const panel = document.createElement("div");
-    panel.id = "kf-agent-panel";
-    panel.innerHTML = `
-      <div id="kf-resizer"></div>
-      <div class="panel-header">
-        <div class="header-left">
-          <div class="header-icon">${ICON.bot}</div>
-          <div>
-            <div class="header-title">AI Assistant</div>
-            <div class="header-status">● Online</div>
-          </div>
-        </div>
-        <div class="header-actions">
-          <button id="kf-key-btn" aria-label="LLM API key settings" title="Use your own LLM API key">${ICON.key}</button>
-          <button id="kf-new-chat" aria-label="New chat">${ICON.plus}</button>
-          <button id="kf-close" aria-label="Close panel">${ICON.close}</button>
-        </div>
-      </div>
-      <div id="kf-context-status">
-        <span>AI has context of:</span>
-        <div class="kf-context-badge">
-          <span id="kf-page-title">Current Documentation</span>
-        </div>
-      </div>
-      <div id="kf-key-panel" hidden>
-        <div class="kf-key-title">Use your own LLM API key</div>
-        <p class="kf-key-help" id="kf-key-help">Your key is kept only in this browser tab (sessionStorage, cleared when the tab closes) and is sent only to this assistant's API with your questions.</p>
-        <label for="kf-key-input">API key</label>
-        <input id="kf-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
-        <label for="kf-model-input">Model (optional)</label>
-        <input id="kf-model-input" type="text" autocomplete="off" spellcheck="false" placeholder="Server default">
-        <div class="kf-key-actions">
-          <button id="kf-key-save" type="button">Save key</button>
-          <button id="kf-key-clear" type="button">Clear key</button>
-        </div>
-        <div id="kf-key-msg" role="status"></div>
-      </div>
-      <div id="kf-agent-messages">
-        <div class="kf-welcome">
-          <div class="welcome-icon">${ICON.sparkle}</div>
-          <h3>Kubeflow Docs Agent</h3>
-          <p>Ask anything about Kubeflow — installation, pipelines, KServe, troubleshooting, and more.</p>
-          <div class="kf-suggestions">
-            <button data-q="How do I install Kubeflow?">Install Kubeflow</button>
-            <button data-q="What is KServe?">What is KServe?</button>
-            <button data-q="How to create a Kubeflow Pipeline?">Pipelines</button>
-            <button data-q="How to use Kubeflow Notebooks?">Notebooks</button>
-          </div>
-        </div>
-      </div>
-      <div id="kf-agent-input-area">
-        <div id="kf-agent-input-wrap">
-          <textarea id="kf-agent-input" rows="1" placeholder="Ask a question..."></textarea>
-          <button id="kf-agent-send">${ICON.send}</button>
-        </div>
-        <div class="kf-footer-text">GSoC 2026 · Kubeflow Docs Agent · Powered by Milvus, Groq, and Architecture B</div>
-      </div>
-    `;
-    document.body.appendChild(panel);
-
-    // RESTORE SESSION
-    threadId = localStorage.getItem("kf-thread-id");
-    const savedMsgs = localStorage.getItem("kf-messages");
-    if (savedMsgs) {
-      document.getElementById("kf-agent-messages").innerHTML = savedMsgs;
-    }
-
-    const wasOpen = localStorage.getItem("kf-panel-open") === "true";
-    if (wasOpen) {
-      toggle(true);
-    }
-
-    const savedWidth = localStorage.getItem("kf-panel-width");
-    if (savedWidth) {
-      panel.style.width = savedWidth + "px";
-    }
-
-    // RESIZE LOGIC
-    const resizer = document.getElementById("kf-resizer");
-    let isResizing = false;
-
-    resizer.addEventListener("mousedown", (e) => {
-      isResizing = true;
-      resizer.classList.add("dragging");
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    });
-
-    window.addEventListener("mousemove", (e) => {
-      if (!isResizing) return;
-      const newWidth = window.innerWidth - e.clientX;
-      if (newWidth > 320 && newWidth < 800) {
-        panel.style.width = newWidth + "px";
-        localStorage.setItem("kf-panel-width", newWidth);
-      }
-    });
-
-    window.addEventListener("mouseup", () => {
-      isResizing = false;
-      resizer.classList.remove("dragging");
-      document.body.style.cursor = "default";
-      document.body.style.userSelect = "auto";
-    });
-
-    // Event listeners
-    document.getElementById("kf-close").addEventListener("click", () => toggle());
-    document.getElementById("kf-new-chat").addEventListener("click", resetChat);
-    document.getElementById("kf-key-btn").addEventListener("click", () => toggleKeyPanel());
-    document.getElementById("kf-key-save").addEventListener("click", saveKey);
-    document.getElementById("kf-key-clear").addEventListener("click", clearKey);
-    document.getElementById("kf-key-input").addEventListener("keydown", function (e) {
-      if (e.key === "Enter") saveKey();
-    });
-    document.getElementById("kf-agent-send").addEventListener("click", handleSend);
-
-    const input = document.getElementById("kf-agent-input");
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    });
-    // Auto-resize textarea
-    input.addEventListener("input", function () {
-      this.style.height = "auto";
-      this.style.height = Math.min(this.scrollHeight, 120) + "px";
-    });
-
-    bindSuggestions();
-    updateKeyStatus();
-    loadServerConfig();
-  }
-
-  // ── Bring-your-own LLM API key ──────────────────────────────
-  // Stored in sessionStorage so it disappears when the tab closes, and sent
-  // only to API_URL as the X-LLM-API-Key header (never in the body or URL).
+  // Bring-your-own key: sessionStorage only, so it disappears with the tab.
   const KEY_STORE = "kf-llm-api-key";
   const MODEL_STORE = "kf-llm-model";
-  let serverConfig = null;
+  const MAX_SAVED_MESSAGES = 40;
 
-  function readSession(name) {
-    try { return sessionStorage.getItem(name) || ""; } catch (e) { return ""; }
-  }
+  // --- State ---------------------------------------------------
+  const state = {
+    open: false,
+    threadId: null,
+    messages: [], // {role, content, citations, steps, error, stopped}
+    streaming: false,
+    controller: null,
+    serverConfig: null,
+    stickToBottom: true,
+  };
 
+  // --- Icons (inline SVG, currentColor) --------------------------
+  const svg = (body, extra) =>
+    '<svg viewBox="0 0 24 24" aria-hidden="true" ' + (extra || "") + ">" + body + "</svg>";
+  const ICON = {
+    sparkle: svg('<path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/>'),
+    close: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
+    plus: svg('<path d="M12 5v14M5 12h14"/>'),
+    key: svg('<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>'),
+    send: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+    stop: svg('<rect x="7" y="7" width="10" height="10" rx="2"/>', 'class="kf-fill"'),
+    copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
+    check: svg('<path d="M20 6 9 17l-5-5"/>'),
+    retry: svg('<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5"/>'),
+    expand: svg('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'),
+    collapse: svg('<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>'),
+    doc: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>'),
+    code: svg('<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>'),
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>'),
+    route: svg('<path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/>'),
+    pen: svg('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>'),
+    down: svg('<path d="M12 5v14M19 12l-7 7-7-7"/>'),
+    rocket: svg('<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.2 2.2 0 0 0-2.9-.1zM12 15l-3-3a22 22 0 0 1 2-3.9A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22.4 22.4 0 0 1-4 2z"/>'),
+    box: svg('<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>'),
+    bug: svg('<path d="M8 2l1.9 1.9M16 2l-1.9 1.9M9 7.1V6a3 3 0 1 1 6 0v1.1M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6zM12 20v-9M6.5 13H3M21 13h-3.5M6 9l-3-2M18 9l3-2M6 17l-3 2M18 17l3 2"/>'),
+  };
+
+  // --- Storage helpers (never throw: private mode, blocked storage) ---
+  function lsGet(name) { try { return localStorage.getItem(name); } catch (e) { return null; } }
+  function lsSet(name, value) { try { localStorage.setItem(name, value); } catch (e) { /* ignore */ } }
+  function lsRemove(name) { try { localStorage.removeItem(name); } catch (e) { /* ignore */ } }
+  function readSession(name) { try { return sessionStorage.getItem(name) || ""; } catch (e) { return ""; } }
   function writeSession(name, value) {
     try {
       if (value) sessionStorage.setItem(name, value);
@@ -207,10 +101,707 @@
     } catch (e) { /* storage unavailable: key lives only for this request */ }
   }
 
+  const $ = (id) => document.getElementById(id);
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str == null ? "" : String(str);
+    return div.innerHTML;
+  }
+
+  function pageTitle() {
+    const h1 = document.querySelector("main h1, .td-content h1, h1");
+    return ((h1 && h1.innerText) || document.title || "this page").trim();
+  }
+
+  // --- Markdown (sanitized) ------------------------------------
+  function renderMarkdown(text) {
+    if (window.marked && window.DOMPurify) {
+      const html = window.marked.parse(text || "", { gfm: true, breaks: false });
+      return window.DOMPurify.sanitize(html);
+    }
+    // Without a sanitizer never inject model HTML: escape and keep line breaks.
+    return "<p>" + escapeHtml(text || "").replace(/\n/g, "<br>") + "</p>";
+  }
+
+  function enhanceMarkdown(container) {
+    container.querySelectorAll("a[href]").forEach((a) => {
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+    });
+    container.querySelectorAll("pre").forEach((pre) => {
+      if (pre.parentElement && pre.parentElement.classList.contains("kf-code")) return;
+      const code = pre.querySelector("code");
+      const match = code && /language-([\w+-]+)/.exec(code.className || "");
+      const wrap = document.createElement("div");
+      wrap.className = "kf-code";
+      const head = document.createElement("div");
+      head.className = "kf-code-head";
+      const lang = document.createElement("span");
+      lang.textContent = match ? match[1] : "code";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "kf-code-copy";
+      btn.innerHTML = ICON.copy + "<span>Copy</span>";
+      btn.addEventListener("click", () => copyText((code || pre).innerText, btn));
+      head.appendChild(lang);
+      head.appendChild(btn);
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(head);
+      wrap.appendChild(pre);
+    });
+  }
+
+  function copyText(text, button) {
+    const done = () => {
+      if (!button) return;
+      const original = button.innerHTML;
+      button.innerHTML = ICON.check + "<span>Copied</span>";
+      button.classList.add("kf-copied");
+      setTimeout(() => {
+        button.innerHTML = original;
+        button.classList.remove("kf-copied");
+      }, 1500);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand("copy"); done(); } catch (e) { /* ignore */ }
+    area.remove();
+  }
+
+  // --- Sources -------------------------------------------------
+  function titleCase(slug) {
+    return decodeURIComponent(slug)
+      .replace(/[-_]+/g, " ")
+      .replace(/\.(md|html?)$/i, "")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function describeSource(url) {
+    try {
+      const u = new URL(url, window.location.href);
+      if (u.hostname === "github.com") {
+        const parts = u.pathname.split("/").filter(Boolean);
+        const blob = parts.indexOf("blob");
+        const filePath = blob >= 0 ? parts.slice(blob + 2) : parts.slice(2);
+        const file = filePath[filePath.length - 1] || parts[1] || "GitHub";
+        const dir = filePath.slice(0, -1).join("/");
+        const line = /^#L(\d+)/.exec(u.hash);
+        return {
+          kind: "code",
+          title: file,
+          subtitle: (parts[0] && parts[1] ? parts[0] + "/" + parts[1] : "github") +
+            (dir ? " · " + dir : "") + (line ? " · L" + line[1] : ""),
+        };
+      }
+      const segments = u.pathname.split("/").filter(Boolean);
+      const docsIndex = segments.indexOf("docs");
+      const trail = (docsIndex >= 0 ? segments.slice(docsIndex + 1) : segments).map(titleCase);
+      return {
+        kind: "docs",
+        title: trail[trail.length - 1] || u.hostname,
+        subtitle: [u.hostname.replace(/^www\./, "")].concat(trail.slice(0, -1)).join(" › "),
+      };
+    } catch (e) {
+      return { kind: "docs", title: url, subtitle: "" };
+    }
+  }
+
+  // --- DOM -----------------------------------------------------
+  function buildDom() {
+    const btn = document.createElement("button");
+    btn.id = "kf-agent-btn";
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Ask the Kubeflow AI assistant");
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+    btn.innerHTML = ICON.sparkle + "<span>Ask AI</span><kbd>" + (isMac ? "⌘" : "Ctrl") + " I</kbd>";
+    btn.addEventListener("click", () => toggle(true));
+    document.body.appendChild(btn);
+
+    const panel = document.createElement("aside");
+    panel.id = "kf-agent-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Kubeflow AI assistant");
+    panel.innerHTML = `
+      <div id="kf-resizer" aria-hidden="true"></div>
+      <header class="kf-header">
+        <div class="kf-brand">
+          <span class="kf-logo">${ICON.sparkle}</span>
+          <div class="kf-brand-text">
+            <div class="kf-title">Kubeflow Assistant</div>
+            <div class="kf-status" id="kf-status">Docs + manifests · Online</div>
+          </div>
+        </div>
+        <div class="kf-header-actions">
+          <button type="button" id="kf-new-chat" class="kf-icon-btn" aria-label="New chat" title="New chat">${ICON.pen}</button>
+          <button type="button" id="kf-key-btn" class="kf-icon-btn" aria-label="LLM API key settings" title="Use your own LLM API key">${ICON.key}</button>
+          <button type="button" id="kf-wide-btn" class="kf-icon-btn" aria-label="Toggle wide view" title="Wide view">${ICON.expand}</button>
+          <button type="button" id="kf-close" class="kf-icon-btn" aria-label="Close assistant" title="Close (Esc)">${ICON.close}</button>
+        </div>
+      </header>
+      <div id="kf-key-panel" hidden>
+        <div class="kf-key-title">${ICON.key}<span>Use your own LLM API key</span></div>
+        <p class="kf-key-help" id="kf-key-help">Your key is kept only in this browser tab (sessionStorage, cleared when the tab closes) and is sent only to this assistant's API with your questions.</p>
+        <label for="kf-key-input">API key</label>
+        <input id="kf-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+        <label for="kf-model-input">Model <span class="kf-optional">optional</span></label>
+        <input id="kf-model-input" type="text" autocomplete="off" spellcheck="false" placeholder="Server default">
+        <div class="kf-key-actions">
+          <button id="kf-key-clear" type="button" class="kf-btn kf-btn-ghost">Clear key</button>
+          <button id="kf-key-save" type="button" class="kf-btn kf-btn-primary">Save key</button>
+        </div>
+        <div id="kf-key-msg" role="status"></div>
+      </div>
+      <div id="kf-scroll">
+        <div id="kf-agent-messages" aria-live="polite"></div>
+      </div>
+      <button type="button" id="kf-jump" class="kf-icon-btn" aria-label="Jump to latest" hidden>${ICON.down}</button>
+      <footer class="kf-composer">
+        <div id="kf-agent-input-wrap">
+          <textarea id="kf-agent-input" rows="1" placeholder="Ask anything about Kubeflow…" aria-label="Message"></textarea>
+          <button type="button" id="kf-agent-send" aria-label="Send message" disabled>${ICON.send}</button>
+        </div>
+        <div class="kf-composer-meta">
+          <span class="kf-context" id="kf-context">${ICON.doc}<span id="kf-page-title"></span></span>
+          <span class="kf-disclaimer">AI can make mistakes. Check the sources.</span>
+        </div>
+      </footer>
+    `;
+    document.body.appendChild(panel);
+  }
+
+  function bindEvents() {
+    const panel = $("kf-agent-panel");
+    $("kf-close").addEventListener("click", () => toggle(false));
+    $("kf-new-chat").addEventListener("click", resetChat);
+    $("kf-wide-btn").addEventListener("click", toggleWide);
+    $("kf-key-btn").addEventListener("click", () => toggleKeyPanel());
+    $("kf-key-save").addEventListener("click", saveKey);
+    $("kf-key-clear").addEventListener("click", clearKey);
+    $("kf-key-input").addEventListener("keydown", (e) => { if (e.key === "Enter") saveKey(); });
+    $("kf-agent-send").addEventListener("click", () => (state.streaming ? stopStreaming() : handleSend()));
+    $("kf-jump").addEventListener("click", () => { state.stickToBottom = true; scrollToBottom(true); });
+
+    const input = $("kf-agent-input");
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        if (!state.streaming) handleSend();
+      }
+    });
+    input.addEventListener("input", () => {
+      autoGrow(input);
+      updateSendButton();
+    });
+
+    const scroller = $("kf-scroll");
+    scroller.addEventListener("scroll", () => {
+      const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      state.stickToBottom = distance < 80;
+      $("kf-jump").hidden = state.stickToBottom;
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        toggle();
+      } else if (e.key === "Escape" && state.open) {
+        if (!$("kf-key-panel").hidden) toggleKeyPanel(false);
+        else toggle(false);
+      }
+    });
+
+    // Resize by dragging the left edge.
+    const resizer = $("kf-resizer");
+    let resizing = false;
+    resizer.addEventListener("mousedown", (e) => {
+      resizing = true;
+      e.preventDefault();
+      panel.classList.add("kf-resizing");
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!resizing) return;
+      const width = Math.min(Math.max(window.innerWidth - e.clientX, 360), Math.min(960, window.innerWidth - 40));
+      panel.style.width = width + "px";
+    });
+    window.addEventListener("mouseup", () => {
+      if (!resizing) return;
+      resizing = false;
+      panel.classList.remove("kf-resizing");
+      lsSet(STORE.width, parseInt(panel.style.width, 10) || "");
+    });
+  }
+
+  function autoGrow(input) {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 180) + "px";
+  }
+
+  function updateSendButton() {
+    const send = $("kf-agent-send");
+    if (state.streaming) {
+      send.disabled = false;
+      send.innerHTML = ICON.stop;
+      send.classList.add("kf-stop");
+      send.setAttribute("aria-label", "Stop generating");
+      return;
+    }
+    send.innerHTML = ICON.send;
+    send.classList.remove("kf-stop");
+    send.setAttribute("aria-label", "Send message");
+    send.disabled = !$("kf-agent-input").value.trim();
+  }
+
+  // --- Panel ---------------------------------------------------
+  function toggle(forceOpen) {
+    state.open = forceOpen === undefined ? !state.open : !!forceOpen;
+    const panel = $("kf-agent-panel");
+    panel.classList.toggle("kf-open", state.open);
+    $("kf-agent-btn").classList.toggle("kf-hidden", state.open);
+    lsSet(STORE.open, String(state.open));
+    if (state.open) {
+      $("kf-page-title").textContent = pageTitle();
+      $("kf-context").title = "The assistant knows you are reading: " + pageTitle();
+      renderAll();
+      setTimeout(() => $("kf-agent-input").focus(), 60);
+    }
+  }
+
+  function toggleWide() {
+    const panel = $("kf-agent-panel");
+    const wide = !panel.classList.contains("kf-wide");
+    panel.classList.toggle("kf-wide", wide);
+    $("kf-wide-btn").innerHTML = wide ? ICON.collapse : ICON.expand;
+    lsSet(STORE.wide, String(wide));
+  }
+
+  function resetChat() {
+    stopStreaming();
+    state.threadId = null;
+    state.messages = [];
+    lsRemove(STORE.thread);
+    persist();
+    renderAll();
+    $("kf-agent-input").focus();
+  }
+
+  // --- Rendering -----------------------------------------------
+  function suggestionList() {
+    const title = pageTitle();
+    return [
+      { icon: ICON.doc, title: "Summarize this page", prompt: 'Summarize the Kubeflow docs page "' + title + '" and list the key steps.' },
+      { icon: ICON.rocket, title: "Install Kubeflow", prompt: "How do I install Kubeflow using the manifests?" },
+      { icon: ICON.box, title: "Serve a model with KServe", prompt: "How do I deploy a model with KServe?" },
+      { icon: ICON.code, title: "Show me a manifest", prompt: "Show me the YAML for the notebook controller mutating webhook." },
+    ];
+  }
+
+  function renderEmpty(container) {
+    const empty = document.createElement("div");
+    empty.className = "kf-empty";
+    empty.innerHTML = `
+      <div class="kf-empty-logo">${ICON.sparkle}</div>
+      <h2>How can I help with Kubeflow?</h2>
+      <p>Answers come from the official docs and the kubeflow/manifests code, with sources you can check.</p>
+      <div class="kf-suggestions"></div>
+    `;
+    const grid = empty.querySelector(".kf-suggestions");
+    suggestionList().forEach((s) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "kf-suggestion";
+      card.innerHTML = '<span class="kf-suggestion-icon">' + s.icon + "</span><span></span>";
+      card.lastChild.textContent = s.title;
+      card.addEventListener("click", () => sendMessage(s.prompt));
+      grid.appendChild(card);
+    });
+    container.appendChild(empty);
+  }
+
+  function renderAll() {
+    const container = $("kf-agent-messages");
+    container.innerHTML = "";
+    if (!state.messages.length) {
+      renderEmpty(container);
+      return;
+    }
+    state.messages.forEach((msg, index) => container.appendChild(renderMessage(msg, index)));
+    scrollToBottom(true);
+  }
+
+  function renderMessage(msg, index) {
+    const row = document.createElement("div");
+    row.className = "kf-row kf-" + msg.role;
+    row.dataset.index = String(index);
+    if (msg.role === "user") {
+      const bubble = document.createElement("div");
+      bubble.className = "kf-bubble";
+      bubble.textContent = msg.content;
+      row.appendChild(bubble);
+      return row;
+    }
+    row.innerHTML = `
+      <div class="kf-avatar">${ICON.sparkle}</div>
+      <div class="kf-content">
+        <div class="kf-steps-slot"></div>
+        <div class="kf-md"></div>
+        <div class="kf-error" hidden></div>
+        <div class="kf-sources" hidden></div>
+        <div class="kf-actions" hidden></div>
+      </div>
+    `;
+    updateAssistant(row, msg, index);
+    return row;
+  }
+
+  function stepIcon(step) {
+    if (step.state === "active") return '<span class="kf-spinner"></span>';
+    return { route: ICON.route, docs: ICON.doc, code: ICON.code, search: ICON.search, write: ICON.pen }[step.kind] || ICON.check;
+  }
+
+  function renderSteps(slot, msg, live) {
+    slot.innerHTML = "";
+    if (!msg.steps || !msg.steps.length) return;
+    const list = document.createElement("ol");
+    list.className = "kf-step-list";
+    msg.steps.forEach((step) => {
+      const li = document.createElement("li");
+      li.className = "kf-step kf-step-" + step.state;
+      li.innerHTML = '<span class="kf-step-icon">' + stepIcon(step) + '</span><span class="kf-step-label"></span>';
+      li.lastChild.textContent = step.label;
+      list.appendChild(li);
+    });
+    if (live) {
+      slot.appendChild(list);
+      return;
+    }
+    const details = document.createElement("details");
+    details.className = "kf-steps";
+    const summary = document.createElement("summary");
+    const searches = msg.steps.filter((s) => s.kind === "docs" || s.kind === "code" || s.kind === "search").length;
+    const sources = (msg.citations || []).length;
+    summary.textContent = searches
+      ? "Ran " + searches + (searches === 1 ? " search" : " searches") +
+        (sources ? " · " + sources + (sources === 1 ? " source" : " sources") : "")
+      : "Agent steps";
+    details.appendChild(summary);
+    details.appendChild(list);
+    slot.appendChild(details);
+  }
+
+  function renderSources(box, citations) {
+    box.innerHTML = "";
+    if (!citations || !citations.length) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    const label = document.createElement("div");
+    label.className = "kf-sources-label";
+    label.textContent = "Sources";
+    box.appendChild(label);
+    const grid = document.createElement("div");
+    grid.className = "kf-source-grid";
+    citations.slice(0, 8).forEach((url, i) => {
+      const info = describeSource(url);
+      const card = document.createElement("a");
+      card.className = "kf-source kf-source-" + info.kind;
+      card.href = url;
+      card.target = "_blank";
+      card.rel = "noopener noreferrer";
+      card.title = url;
+      card.innerHTML = '<span class="kf-source-num"></span><span class="kf-source-icon">' +
+        (info.kind === "code" ? ICON.code : ICON.doc) +
+        '</span><span class="kf-source-text"><span class="kf-source-title"></span><span class="kf-source-sub"></span></span>';
+      card.querySelector(".kf-source-num").textContent = String(i + 1);
+      card.querySelector(".kf-source-title").textContent = info.title;
+      card.querySelector(".kf-source-sub").textContent = info.subtitle;
+      grid.appendChild(card);
+    });
+    box.appendChild(grid);
+  }
+
+  function renderActions(box, msg, index) {
+    box.innerHTML = "";
+    const live = state.streaming && index === state.messages.length - 1;
+    if (live || (!msg.content && !msg.error)) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    if (msg.content) {
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "kf-action";
+      copy.innerHTML = ICON.copy + "<span>Copy</span>";
+      copy.addEventListener("click", () => copyText(msg.content, copy));
+      box.appendChild(copy);
+    }
+    if (index === state.messages.length - 1 && !state.streaming) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "kf-action";
+      retry.innerHTML = ICON.retry + "<span>Regenerate</span>";
+      retry.addEventListener("click", regenerate);
+      box.appendChild(retry);
+    }
+  }
+
+  function updateAssistant(row, msg, index) {
+    const live = state.streaming && index === state.messages.length - 1;
+    renderSteps(row.querySelector(".kf-steps-slot"), msg, live && !msg.content);
+
+    const md = row.querySelector(".kf-md");
+    if (msg.content) {
+      md.innerHTML = renderMarkdown(msg.content);
+      enhanceMarkdown(md);
+    } else if (!live && !msg.error) {
+      md.innerHTML = '<p class="kf-muted">' + (msg.stopped ? "Stopped." : "No answer was returned for this question.") + "</p>";
+    } else {
+      md.innerHTML = "";
+    }
+    md.classList.toggle("kf-streaming", live && !!msg.content);
+    if (msg.stopped && msg.content) {
+      const note = document.createElement("p");
+      note.className = "kf-muted";
+      note.textContent = "Stopped.";
+      md.appendChild(note);
+    }
+
+    const error = row.querySelector(".kf-error");
+    error.hidden = !msg.error;
+    error.textContent = msg.error || "";
+
+    renderSources(row.querySelector(".kf-sources"), live ? [] : msg.citations);
+    renderActions(row.querySelector(".kf-actions"), msg, index);
+  }
+
+  let frameRequested = false;
+  function scheduleUpdate() {
+    if (frameRequested) return;
+    frameRequested = true;
+    requestAnimationFrame(() => {
+      frameRequested = false;
+      refreshLast();
+    });
+  }
+
+  function refreshLast() {
+    const index = state.messages.length - 1;
+    const row = $("kf-agent-messages").querySelector('.kf-row[data-index="' + index + '"]');
+    if (row && state.messages[index].role === "assistant") updateAssistant(row, state.messages[index], index);
+    scrollToBottom();
+  }
+
+  function scrollToBottom(force) {
+    const scroller = $("kf-scroll");
+    if (force || state.stickToBottom) {
+      scroller.scrollTop = scroller.scrollHeight;
+      $("kf-jump").hidden = true;
+    }
+  }
+
+  function persist() {
+    const saved = state.messages.slice(-MAX_SAVED_MESSAGES).map((m) => ({
+      role: m.role,
+      content: m.content,
+      citations: m.citations || [],
+      steps: (m.steps || []).map((s) => ({ kind: s.kind, label: s.label, state: "done" })),
+      error: m.error || "",
+      stopped: !!m.stopped,
+    }));
+    lsSet(STORE.messages, JSON.stringify(saved));
+  }
+
+  function restore() {
+    lsRemove(STORE.legacyMessages); // old versions stored raw HTML; never re-inject it
+    state.threadId = lsGet(STORE.thread);
+    try {
+      const saved = JSON.parse(lsGet(STORE.messages) || "[]");
+      state.messages = Array.isArray(saved)
+        ? saved.filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+        : [];
+    } catch (e) {
+      state.messages = [];
+    }
+    const width = parseInt(lsGet(STORE.width), 10);
+    if (width) $("kf-agent-panel").style.width = width + "px";
+    if (lsGet(STORE.wide) === "true") toggleWide();
+  }
+
+  // --- Agent steps from SSE events -----------------------------
+  const TOOL_LABELS = {
+    search_kubeflow_docs: { kind: "docs", label: "Searched the documentation" },
+    search_kubeflow_code: { kind: "code", label: "Searched manifests and code" },
+    search_kubeflow_context: { kind: "search", label: "Searched docs and code" },
+  };
+  const ROUTE_LABELS = {
+    docs: "Routed to documentation",
+    code: "Routed to manifests and code",
+    hybrid: "Routed to docs and code",
+  };
+
+  function setActiveStep(msg, kind, label) {
+    msg.steps = (msg.steps || []).filter((s) => s.state !== "active");
+    msg.steps.push({ kind: kind, label: label, state: "active" });
+  }
+
+  function completeSteps(msg) {
+    msg.steps = (msg.steps || []).filter((s) => s.state !== "active");
+  }
+
+  function handleEvent(msg, data) {
+    switch (data.type) {
+      case "thread":
+        if (data.thread_id) {
+          state.threadId = data.thread_id;
+          lsSet(STORE.thread, state.threadId);
+        }
+        completeSteps(msg);
+        if (data.route) msg.steps.push({ kind: "route", label: ROUTE_LABELS[data.route] || "Routed: " + data.route, state: "done" });
+        setActiveStep(msg, "search", "Searching Kubeflow knowledge…");
+        break;
+      case "tool_result": {
+        const tool = TOOL_LABELS[data.tool_name] || { kind: "search", label: "Ran " + (data.tool_name || "tool") };
+        const hits = ((data.content || "").match(/^\[(DOCS|CODE)\]/gm) || []).length;
+        completeSteps(msg);
+        msg.steps.push({ kind: tool.kind, label: tool.label + (hits ? " · " + hits + " results" : ""), state: "done" });
+        setActiveStep(msg, "write", "Writing the answer…");
+        break;
+      }
+      case "content":
+        if (!msg.content) completeSteps(msg);
+        msg.content += data.content || "";
+        break;
+      case "citations":
+        msg.citations = Array.from(new Set((msg.citations || []).concat(data.citations || [])));
+        break;
+      case "error":
+        completeSteps(msg);
+        msg.error = data.content || "Something went wrong.";
+        if (data.status === 401 || data.status === 403) toggleKeyPanel(true);
+        break;
+      default:
+        break;
+    }
+  }
+
+  // --- Sending -------------------------------------------------
+  function handleSend() {
+    const input = $("kf-agent-input");
+    const text = input.value.trim();
+    if (!text || state.streaming) return;
+    input.value = "";
+    autoGrow(input);
+    sendMessage(text);
+  }
+
+  function regenerate() {
+    if (state.streaming) return;
+    let lastUser = -1;
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+      if (state.messages[i].role === "user") { lastUser = i; break; }
+    }
+    if (lastUser < 0) return;
+    const text = state.messages[lastUser].content;
+    state.messages = state.messages.slice(0, lastUser);
+    sendMessage(text);
+  }
+
+  function stopStreaming() {
+    if (state.controller) state.controller.abort();
+  }
+
+  async function sendMessage(text) {
+    if (state.streaming) return;
+    if (!state.open) toggle(true);
+
+    const msg = { role: "assistant", content: "", citations: [], steps: [], error: "", stopped: false };
+    state.messages.push({ role: "user", content: text });
+    state.messages.push(msg);
+    setActiveStep(msg, "route", "Understanding the question…");
+    state.streaming = true;
+    state.stickToBottom = true;
+    state.controller = new AbortController();
+    updateSendButton();
+    renderAll();
+
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: requestHeaders(),
+        signal: state.controller.signal,
+        body: JSON.stringify({
+          message: text,
+          stream: true,
+          thread_id: state.threadId,
+          context: { url: window.location.href, title: pageTitle(), path: window.location.pathname },
+        }),
+      });
+
+      if (!response.ok) {
+        let detail = "";
+        try { detail = (await response.json()).detail || ""; } catch (e) { /* non-JSON error */ }
+        if (response.status === 401 || response.status === 400) toggleKeyPanel(true);
+        completeSteps(msg);
+        msg.error = detail || "The assistant returned HTTP " + response.status + ".";
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = "";
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) break;
+        // SSE events can be split across network chunks: keep the trailing
+        // partial line buffered until the next chunk completes it.
+        sseBuffer += decoder.decode(result.value, { stream: true });
+        const lines = sseBuffer.split("\n");
+        sseBuffer = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch (e) { continue; }
+          handleEvent(msg, data);
+          scheduleUpdate();
+        }
+      }
+    } catch (err) {
+      completeSteps(msg);
+      if (err && err.name === "AbortError") {
+        msg.stopped = true;
+      } else {
+        console.error("Kubeflow agent error:", err);
+        msg.error = "Couldn't reach the assistant API (" + API_URL + "). Is it running?";
+      }
+    } finally {
+      completeSteps(msg);
+      state.streaming = false;
+      state.controller = null;
+      updateSendButton();
+      persist();
+      refreshLast();
+    }
+  }
+
+  // --- Bring-your-own LLM API key ------------------------------
   function requestHeaders() {
-    var headers = { "Content-Type": "application/json" };
-    var key = readSession(KEY_STORE);
-    var model = readSession(MODEL_STORE);
+    const headers = { "Content-Type": "application/json" };
+    const key = readSession(KEY_STORE);
+    const model = readSession(MODEL_STORE);
     if (key) {
       headers["X-LLM-API-Key"] = key;
       if (model) headers["X-LLM-Model"] = model;
@@ -219,33 +810,37 @@
   }
 
   function updateKeyStatus() {
-    var status = document.querySelector("#kf-agent-panel .header-status");
-    var hasKey = !!readSession(KEY_STORE);
-    var needsKey = !!(serverConfig && serverConfig.require_client_api_key && !hasKey);
-    status.textContent = hasKey ? "● Using your API key" : needsKey ? "● API key required" : "● Online";
+    const status = $("kf-status");
+    const hasKey = !!readSession(KEY_STORE);
+    const needsKey = !!(state.serverConfig && state.serverConfig.require_client_api_key && !hasKey);
+    status.textContent = hasKey
+      ? "Docs + manifests · Using your API key"
+      : needsKey ? "API key required · click the key icon" : "Docs + manifests · Online";
     status.classList.toggle("kf-status-warn", needsKey);
-    document.getElementById("kf-key-btn").classList.toggle("kf-key-active", hasKey);
+    status.classList.toggle("kf-status-key", hasKey);
+    $("kf-key-btn").classList.toggle("kf-key-active", hasKey);
   }
 
   function setKeyMessage(text) {
-    document.getElementById("kf-key-msg").textContent = text;
+    $("kf-key-msg").textContent = text;
   }
 
   function toggleKeyPanel(forceOpen) {
-    var keyPanel = document.getElementById("kf-key-panel");
-    var open = forceOpen !== undefined ? forceOpen : keyPanel.hidden;
+    const keyPanel = $("kf-key-panel");
+    const open = forceOpen !== undefined ? forceOpen : keyPanel.hidden;
     keyPanel.hidden = !open;
+    $("kf-key-btn").classList.toggle("kf-pressed", open);
     if (open) {
-      document.getElementById("kf-key-input").value = readSession(KEY_STORE);
-      document.getElementById("kf-model-input").value = readSession(MODEL_STORE);
+      $("kf-key-input").value = readSession(KEY_STORE);
+      $("kf-model-input").value = readSession(MODEL_STORE);
       setKeyMessage("");
-      document.getElementById("kf-key-input").focus();
+      $("kf-key-input").focus();
     }
   }
 
   function saveKey() {
-    var key = document.getElementById("kf-key-input").value.trim();
-    var model = document.getElementById("kf-model-input").value.trim();
+    const key = $("kf-key-input").value.trim();
+    const model = $("kf-model-input").value.trim();
     if (!key) {
       setKeyMessage("Paste a key first, or use Clear key to go back to the server default.");
       return;
@@ -254,319 +849,72 @@
     writeSession(MODEL_STORE, model);
     updateKeyStatus();
     setKeyMessage("Saved for this tab.");
-    setTimeout(function () { toggleKeyPanel(false); }, 700);
+    setTimeout(() => toggleKeyPanel(false), 700);
   }
 
   function clearKey() {
     writeSession(KEY_STORE, "");
     writeSession(MODEL_STORE, "");
-    document.getElementById("kf-key-input").value = "";
-    document.getElementById("kf-model-input").value = "";
+    $("kf-key-input").value = "";
+    $("kf-model-input").value = "";
     updateKeyStatus();
     setKeyMessage("Key cleared from this browser.");
   }
 
   async function loadServerConfig() {
     try {
-      var response = await fetch(CONFIG_URL);
+      const response = await fetch(CONFIG_URL);
       if (!response.ok) return;
-      serverConfig = await response.json();
+      state.serverConfig = await response.json();
     } catch (e) {
       return; // older API without /config: keep the key option available
     }
-    if (!serverConfig.allow_client_api_keys) {
-      document.getElementById("kf-key-btn").style.display = "none";
+    if (!state.serverConfig.allow_client_api_keys) $("kf-key-btn").style.display = "none";
+    let help = "Your key is kept only in this browser tab (sessionStorage, cleared when the tab closes) and is sent only to this assistant's API with your questions.";
+    if (state.serverConfig.llm_provider_host) {
+      help = "Use a key for " + state.serverConfig.llm_provider_host +
+        (state.serverConfig.model ? " (default model: " + state.serverConfig.model + ")" : "") + ". " + help;
     }
-    var help = "Your key is kept only in this browser tab (sessionStorage, cleared when the tab closes) and is sent only to this assistant's API with your questions.";
-    if (serverConfig.llm_provider_host) {
-      help = "Use a key for " + serverConfig.llm_provider_host +
-        (serverConfig.model ? " (default model: " + serverConfig.model + ")" : "") + ". " + help;
-    }
-    document.getElementById("kf-key-help").textContent = help;
+    $("kf-key-help").textContent = help;
+    if (state.serverConfig.model) $("kf-model-input").placeholder = state.serverConfig.model;
     updateKeyStatus();
   }
 
-  function bindSuggestions() {
-    document.getElementById("kf-agent-panel").querySelectorAll(".kf-suggestions button").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        sendMessage(this.getAttribute("data-q"));
-      });
+  // --- Init ----------------------------------------------------
+  function init() {
+    buildDom();
+    bindEvents();
+    restore();
+    updateKeyStatus();
+    updateSendButton();
+    if (lsGet(STORE.open) === "true") toggle(true);
+    loadServerConfig();
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = resolve; // fall back to escaped plain text
+      document.head.appendChild(script);
     });
   }
 
-  // --- Toggle Panel ----------------------------------------------
-  function toggle(forceOpen) {
-    if (forceOpen !== undefined) isOpen = !forceOpen;
-    isOpen = !isOpen;
-    var panel = document.getElementById("kf-agent-panel");
-    var btn = document.getElementById("kf-agent-btn");
-
-    if (isOpen) {
-      panel.classList.add("open");
-      btn.style.display = "none"; // Hide button to prevent collision
-
-      // Update context hint
-      const title = document.querySelector('h1')?.innerText || document.title;
-      document.getElementById("kf-page-title").textContent = title;
-
-      document.getElementById("kf-agent-input").focus();
-      localStorage.setItem("kf-panel-open", "true");
-    } else {
-      panel.classList.remove("open");
-      btn.style.display = "flex"; // Show button again
-      localStorage.setItem("kf-panel-open", "false");
-    }
-  }
-
-  // ── Reset Chat ──────────────────────────────────────────────
-  function resetChat() {
-    threadId = null;
-    localStorage.removeItem("kf-thread-id");
-    localStorage.removeItem("kf-messages");
-
-    var msgs = document.getElementById("kf-agent-messages");
-    msgs.innerHTML = `
-      <div class="kf-welcome">
-        <div class="welcome-icon">${ICON.sparkle}</div>
-        <h3>Kubeflow Docs Agent</h3>
-        <p>Ask anything about Kubeflow — installation, pipelines, KServe, troubleshooting, and more.</p>
-        <div class="kf-suggestions">
-          <button data-q="How do I install Kubeflow?">Install Kubeflow</button>
-          <button data-q="What is KServe?">What is KServe?</button>
-          <button data-q="How to create a Kubeflow Pipeline?">Pipelines</button>
-          <button data-q="How to use Kubeflow Notebooks?">Notebooks</button>
-        </div>
-      </div>
-    `;
-    bindSuggestions();
-  }
-
-  // ── Handle Send ─────────────────────────────────────────────
-  function handleSend() {
-    var input = document.getElementById("kf-agent-input");
-    var text = input.value.trim();
-    if (!text) return;
-    input.value = "";
-    input.style.height = "auto";
-    sendMessage(text);
-  }
-
-  // --- Send Message -----------------------------------------------------------
-  async function sendMessage(text) {
-    var msgs = document.getElementById("kf-agent-messages");
-
-    // Capture Page Context (Where is the user right now?)
-    const pageContext = {
-      url: window.location.href,
-      title: document.querySelector('h1')?.innerText || document.title,
-      path: window.location.pathname
-    };
-
-    // Clear welcome screen if present
-    var welcome = msgs.querySelector(".kf-welcome");
-    if (welcome) welcome.remove();
-
-    // Add user message
-    appendMessage("user", text);
-
-    // Add thinking indicator
-    var thinkEl = document.createElement("div");
-    thinkEl.className = "kf-msg assistant";
-    thinkEl.id = "kf-thinking";
-    thinkEl.innerHTML = `
-      <div class="kf-avatar">${ICON.bot}</div>
-      <div class="kf-body">
-        <div class="kf-label">Kubeflow Agent</div>
-        <div class="kf-thinking"><span></span><span></span><span></span></div>
-      </div>
-    `;
-    msgs.appendChild(thinkEl);
-    scrollToBottom();
-
-    try {
-      var response = await fetch(API_URL, {
-        method: "POST",
-        headers: requestHeaders(),
-        body: JSON.stringify({
-          message: text,
-          stream: true,
-          thread_id: threadId,
-          context: pageContext  // <--- The AI now knows where you are!
-        }),
-      });
-
-      if (!response.ok) {
-        var detail = "";
-        try { detail = (await response.json()).detail || ""; } catch (e) { /* non-JSON error */ }
-        if (response.status === 401 || response.status === 400) toggleKeyPanel(true);
-        var httpError = new Error(detail || "HTTP " + response.status);
-        httpError.userMessage = detail || "The assistant returned HTTP " + response.status + ".";
-        throw httpError;
-      }
-
-      // Remove thinking indicator
-      var thinking = document.getElementById("kf-thinking");
-      if (thinking) thinking.remove();
-
-      // Create assistant message element
-      var msgEl = document.createElement("div");
-      msgEl.className = "kf-msg assistant";
-      var bodyEl = document.createElement("div");
-      bodyEl.className = "kf-body";
-      var labelEl = document.createElement("div");
-      labelEl.className = "kf-label";
-      labelEl.textContent = "Kubeflow Agent";
-      var textEl = document.createElement("div");
-      textEl.className = "kf-text";
-      textEl.textContent = "";
-      var avatarEl = document.createElement("div");
-      avatarEl.className = "kf-avatar";
-      avatarEl.innerHTML = ICON.bot;
-
-      bodyEl.appendChild(labelEl);
-      bodyEl.appendChild(textEl);
-      msgEl.appendChild(avatarEl);
-      msgEl.appendChild(bodyEl);
-      msgs.appendChild(msgEl);
-
-      // Stream response
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var sseBuffer = "";
-      var content = "";
-      var citations = [];
-      var sawError = false;
-
-      while (true) {
-        var result = await reader.read();
-        if (result.done) {
-          // Final safety check: if content is still empty, let the user know
-          if (!content && !citations.length && !sawError) {
-            textEl.textContent = "The agent couldn't find a specific answer for this query in the documentation.";
-            textEl.style.fontStyle = "italic";
-            textEl.style.opacity = "0.7";
-          }
-          break;
-        }
-
-        // SSE events can be split across network chunks: keep the trailing
-        // partial line buffered until the next chunk completes it.
-        sseBuffer += decoder.decode(result.value, { stream: true });
-        var lines = sseBuffer.split("\n");
-        sseBuffer = lines.pop();
-
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i];
-          if (!line.startsWith("data: ")) continue;
-          try {
-            var data = JSON.parse(line.slice(6));
-
-            if (data.type === "thread" && data.thread_id) {
-              threadId = data.thread_id;
-              localStorage.setItem("kf-thread-id", threadId);
-            } else if (data.type === "content") {
-              content += data.content;
-              // Use marked if available, otherwise fallback to textContent
-              if (window.marked) {
-                textEl.innerHTML = window.marked.parse(content);
-              } else {
-                textEl.textContent = content;
-              }
-              scrollToBottom();
-            } else if (data.type === "citations") {
-              citations = data.citations || [];
-            } else if (data.type === "error") {
-              sawError = true;
-              if (data.status === 401 || data.status === 403) toggleKeyPanel(true);
-              const errorText = content + " **[Error: " + data.content + "]**";
-              if (window.marked) {
-                textEl.innerHTML = window.marked.parse(errorText);
-              } else {
-                textEl.innerHTML = escapeHtml(errorText);
-              }
-              textEl.style.color = "#ef4444";
-              scrollToBottom();
-            }
-          } catch (e) { }
-        }
-      }
-
-      // Render citations
-      if (citations.length > 0) {
-        var citEl = document.createElement("div");
-        citEl.className = "kf-citations";
-        citEl.innerHTML = '<div class="cit-label">📚 Sources</div>';
-        var seen = {};
-        for (var c = 0; c < citations.length; c++) {
-          if (seen[citations[c]]) continue;
-          seen[citations[c]] = true;
-          var a = document.createElement("a");
-          a.href = citations[c];
-          a.target = "_blank";
-          a.rel = "noopener";
-          a.textContent = citations[c];
-          citEl.appendChild(a);
-        }
-        bodyEl.appendChild(citEl);
-      }
-
-      scrollToBottom();
-      localStorage.setItem("kf-messages", msgs.innerHTML);
-    } catch (err) {
-      console.error("Agent error:", err);
-      var thinkingEl = document.getElementById("kf-thinking");
-      if (thinkingEl) thinkingEl.remove();
-      appendMessage("assistant", err.userMessage || "Sorry, I couldn't connect to the backend. Is the API server running?");
-    }
-  }
-
-  // --- Helpers -------------------------------------------------
-  function appendMessage(role, text) {
-    var msgs = document.getElementById("kf-agent-messages");
-    var el = document.createElement("div");
-    el.className = "kf-msg " + role;
-    const bodyContent = (role === "assistant" && window.marked) 
-      ? window.marked.parse(text) 
-      : escapeHtml(text).replace(/\n/g, '<br>');
-
-    el.innerHTML = `
-      <div class="kf-avatar">${role === "user" ? ICON.user : ICON.bot}</div>
-      <div class="kf-body">
-        <div class="kf-label">${role === "user" ? "You" : "Kubeflow Agent"}</div>
-        <div class="kf-text">${bodyContent}</div>
-      </div>
-    `;
-    msgs.appendChild(el);
-    scrollToBottom();
-    localStorage.setItem("kf-messages", msgs.innerHTML);
-  }
-
-  function scrollToBottom() {
-    var msgs = document.getElementById("kf-agent-messages");
-    msgs.scrollTop = msgs.scrollHeight;
-  }
-
-  function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // ── Init on DOM Ready ───────────────────────────────────────
-  function loadMarked(callback) {
-    if (window.marked) {
-      callback();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = MARKED_CDN;
-    script.onload = callback;
-    document.head.appendChild(script);
+  function start() {
+    const deps = [];
+    if (!window.marked) deps.push(loadScript(MARKED_CDN));
+    if (!window.DOMPurify) deps.push(loadScript(PURIFY_CDN));
+    Promise.all(deps).then(() => {
+      init();
+      if (state.open) renderAll();
+    });
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => loadMarked(init));
+    document.addEventListener("DOMContentLoaded", start);
   } else {
-    loadMarked(init);
+    start();
   }
 })();
