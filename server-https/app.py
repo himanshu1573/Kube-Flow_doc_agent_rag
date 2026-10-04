@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from typing import Dict, Any, List, Optional, AsyncGenerator, Tuple
 
 from agent.core.retriever import build_tools_for_route, execute_tool_call
 from agent.core.router import build_system_prompt, classify_question
@@ -151,8 +151,7 @@ async def stream_llm_response(
 
                                 async for follow_up_chunk in handle_tool_follow_up(
                                     payload,
-                                    fallback_tool_call,
-                                    result,
+                                    [(fallback_tool_call, result)],
                                     citations_collector,
                                     response_accumulator,
                                 ):
@@ -211,41 +210,38 @@ async def stream_llm_response(
                         # Handle finish reason - execute tools if needed
                         if finish_reason == "tool_calls":
                             print(f"[TOOL] Finish reason: tool_calls, executing {len(tool_calls_buffer)} tools")
-                            
-                            # Execute all accumulated tool calls
+
+                            # Execute every requested tool first, then send all results
+                            # back in a single follow-up request.
+                            tool_results = []
                             for tool_call in tool_calls_buffer.values():
                                 if tool_call["function"]["name"] and tool_call["function"]["arguments"]:
-                                    try:
-                                        print(f"[TOOL] Executing: {tool_call['function']['name']}")
-                                        print(f"[TOOL] Arguments: {tool_call['function']['arguments']}")
-                                        
-                                        result, tool_citations = await execute_tool(tool_call)
-                                        
-                                        # DEBUG LOG
-                                        print(f"[TOOL-RESULT] Name: {tool_call['function']['name']}")
-                                        print(f"[TOOL-RESULT] Length: {len(result)} chars")
-                                        print(f"[TOOL-RESULT] Citations: {len(tool_citations)}")
-                                        
-                                        # Collect citations
-                                        citations_collector.extend(tool_citations)
-                                        
-                                        # Send tool execution result
-                                        yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_call['function']['name'], 'content': result})}\n\n"
-                                        
-                                        # Make follow-up request with tool results
-                                        async for follow_up_chunk in handle_tool_follow_up(
-                                            payload,
-                                            tool_call,
-                                            result,
-                                            citations_collector,
-                                            response_accumulator,
-                                        ):
-                                            yield follow_up_chunk
-                                        
-                                    except Exception as e:
-                                        print(f"[ERROR] Tool execution error: {e}")
-                                        yield f"data: {json.dumps({'type': 'error', 'content': f'Tool execution failed: {e}'})}\n\n"
-                            
+                                    print(f"[TOOL] Executing: {tool_call['function']['name']}")
+                                    print(f"[TOOL] Arguments: {tool_call['function']['arguments']}")
+
+                                    result, tool_citations = await execute_tool(tool_call)
+
+                                    # DEBUG LOG
+                                    print(f"[TOOL-RESULT] Name: {tool_call['function']['name']}")
+                                    print(f"[TOOL-RESULT] Length: {len(result)} chars")
+                                    print(f"[TOOL-RESULT] Citations: {len(tool_citations)}")
+
+                                    # Collect citations
+                                    citations_collector.extend(tool_citations)
+
+                                    # Send tool execution result
+                                    yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_call['function']['name'], 'content': result})}\n\n"
+                                    tool_results.append((tool_call, result))
+
+                            if tool_results:
+                                async for follow_up_chunk in handle_tool_follow_up(
+                                    payload,
+                                    tool_results,
+                                    citations_collector,
+                                    response_accumulator,
+                                ):
+                                    yield follow_up_chunk
+
                             tool_calls_buffer.clear()
                             break  # Tool execution complete, exit streaming loop
                             
@@ -272,30 +268,30 @@ async def stream_llm_response(
 
 async def handle_tool_follow_up(
     original_payload: Dict[str, Any],
-    tool_call: Dict[str, Any],
-    tool_result: str,
+    tool_results: List[Tuple[Dict[str, Any], str]],
     citations_collector: List[str],
     response_accumulator: Dict[str, Any],
 ) -> AsyncGenerator[str, None]:
-    """Handle follow-up request after tool execution"""
+    """Handle the single follow-up request after all tool calls have executed"""
     try:
-        print("[TOOL] Handling follow-up request with tool results")
-        
+        print(f"[TOOL] Handling follow-up request with {len(tool_results)} tool results")
+
         # Create messages with tool call and result
         messages = original_payload["messages"].copy()
-        
-        # Add assistant's tool call message
+
+        # One assistant turn carrying every tool call, as the OpenAI API expects
         messages.append({
             "role": "assistant",
-            "tool_calls": [tool_call]
+            "tool_calls": [tool_call for tool_call, _ in tool_results]
         })
-        
-        # Add tool result message
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call["id"],
-            "content": tool_result
-        })
+
+        # One tool message per call, matched by tool_call_id
+        for tool_call, tool_result in tool_results:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call["id"],
+                "content": tool_result
+            })
         
         # Create follow-up payload - remove tools to get final response
         follow_up_payload = {
