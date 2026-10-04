@@ -51,6 +51,17 @@ def normalize_url(url: str) -> str:
     return urlunparse(clean)
 
 
+def repair_sitemap_location(location: str) -> str:
+    """Repair sitemap <loc> values that repeat the origin.
+
+    The kubeflow.org sitemap emits values such as
+    ``https://www.kubeflow.orghttps://www.kubeflow.org/docs/...``; keep the
+    last absolute URL in the string.
+    """
+    last_scheme = max(location.rfind("https://"), location.rfind("http://"))
+    return location[last_scheme:] if last_scheme > 0 else location
+
+
 def get_docs_root(base_url: str) -> str:
     """Return the canonical docs root for a Kubeflow website URL."""
     return normalize_url(urljoin(base_url.rstrip("/") + "/", "docs/"))
@@ -126,7 +137,7 @@ def discover_sitemap_urls(
             if elem_name != "loc" or not elem.text:
                 continue
 
-            location = normalize_url(elem.text.strip())
+            location = normalize_url(repair_sitemap_location(elem.text.strip()))
             if tag_name == "sitemapindex":
                 if location not in seen_sitemaps:
                     queue.append(location)

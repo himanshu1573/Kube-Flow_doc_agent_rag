@@ -1,11 +1,49 @@
 import unittest
 
 from pipelines.docs_ingestion.components.chunker import chunk_pages
-from pipelines.docs_ingestion.components.crawler import normalize_url
+from pipelines.docs_ingestion.components.crawler import (
+    discover_sitemap_urls,
+    normalize_url,
+)
 from pipelines.shared.embedding_utils import get_embedding_dimension
 
 
+MALFORMED_SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>https://www.kubeflow.orghttps://www.kubeflow.org/docs/started/introduction/</loc></url>
+<url><loc>https://www.kubeflow.orghttps://www.kubeflow.org/docs/components/pipelines/overview/</loc></url>
+<url><loc>https://www.kubeflow.org/events/</loc></url>
+</urlset>"""
+
+
+class FakeResponse:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
+
+
+class FakeSession:
+    def __init__(self, text):
+        self.text = text
+
+    def get(self, url, timeout=None):
+        return FakeResponse(self.text)
+
+
 class Phase1IngestionTests(unittest.TestCase):
+    def test_sitemap_with_doubled_origin_locs_still_yields_docs_urls(self):
+        # kubeflow.org currently publishes <loc> values with the origin repeated.
+        urls = discover_sitemap_urls(FakeSession(MALFORMED_SITEMAP), "https://www.kubeflow.org")
+        self.assertEqual(
+            urls,
+            [
+                "https://www.kubeflow.org/docs/started/introduction",
+                "https://www.kubeflow.org/docs/components/pipelines/overview",
+            ],
+        )
+
     def test_normalize_url_strips_query_and_fragment(self):
         self.assertEqual(
             normalize_url("https://www.kubeflow.org/docs/?q=test#section"),
