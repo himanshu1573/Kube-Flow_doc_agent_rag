@@ -53,7 +53,27 @@ The widget picks its backend in this order:
 The API sends `Access-Control-Allow-Origin: *`. Restrict it to your site's origin before a real
 production rollout.
 
-## 4. Build and deploy the website image (optional)
+## 4. Bring your own LLM API key
+
+The key icon in the panel header opens **Use your own LLM API key**:
+
+- **Save key** stores the key (and an optional model) in `sessionStorage`. It is cleared when the
+  tab closes and never written to `localStorage`.
+- Each question sends the key to the agent API as the `X-LLM-API-Key` header (and `X-LLM-Model`).
+  The API uses it for that request only and does not log or store it.
+- **Clear key** removes it immediately. The widget then falls back to the server's key, if the
+  deployment has one.
+- On startup the widget reads `GET /config`. It shows which provider the key is for (for example
+  `api.groq.com`), and shows "API key required" when the server sets `REQUIRE_CLIENT_API_KEY=true`.
+- If the provider rejects the key (401), the widget shows the error and reopens the key panel.
+
+For a public deployment, set `REQUIRE_CLIENT_API_KEY=true` on the API so visitors never spend the
+operator's key.
+
+To preview locally without Hugo, run `make web` and open
+`http://127.0.0.1:8090/website/preview.html`.
+
+## 5. Build and deploy the website image (optional)
 
 ```bash
 docker build -t <REGISTRY>/kubeflow-website:latest \

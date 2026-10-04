@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Docs Agent Widget Preview</title>
+  <link rel="stylesheet" href="static/css/agent-widget.css">
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #f8fafc; color: #0f172a; }
+    main { max-width: 760px; margin: 0 auto; padding: 48px 24px; line-height: 1.6; }
+    code { background: #e2e8f0; padding: 1px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Kubeflow Pipelines</h1>
+    <p>
+      Local preview of the website chat widget (<code>website/static/js/agent-widget.js</code>).
+      It loads the same way it does on kubeflow.org. On localhost it calls the agent API at
+      <code>http://localhost:8000/chat</code>. Start the API with <code>make api</code>.
+    </p>
+    <p>
+      Click the blue button in the bottom-right corner. Use the key icon in the panel header to add
+      your own LLM API key for this tab, or clear it.
+    </p>
+  </main>
+  <script src="static/js/agent-widget.js" defer></script>
+</body>
+</html>

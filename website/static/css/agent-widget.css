@@ -528,3 +528,85 @@
     width: 100vw;
   }
 }
+
+/* --- Bring-your-own LLM API key --- */
+.panel-header .header-actions button.kf-key-active {
+  color: #10b981;
+}
+.panel-header .header-status.kf-status-warn {
+  color: #f59e0b;
+}
+#kf-key-panel {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: #111827;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+#kf-key-panel[hidden] {
+  display: none;
+}
+#kf-key-panel .kf-key-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+}
+#kf-key-panel .kf-key-help {
+  margin: 0 0 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.5);
+}
+#kf-key-panel label {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.6);
+}
+#kf-key-panel input {
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+#kf-key-panel input:focus {
+  border-color: rgba(59,130,246,0.5);
+}
+#kf-key-panel .kf-key-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+#kf-key-panel .kf-key-actions button {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.8);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#kf-key-panel #kf-key-save {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+#kf-key-panel #kf-key-save:hover {
+  background: #2563eb;
+}
+#kf-key-panel #kf-key-clear:hover {
+  border-color: rgba(239,68,68,0.5);
+  color: #fca5a5;
+}
+#kf-key-msg {
+  min-height: 14px;
+  font-size: 11px;
+  color: #93c5fd;
+}
