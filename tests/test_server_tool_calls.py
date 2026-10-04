@@ -131,6 +131,40 @@ class ServerToolCallTests(unittest.TestCase):
             [turn["tool_call_id"] for turn in tool_turns], ["call_docs", "call_code"]
         )
 
+    def test_rate_limit_is_retried_after_retry_after(self):
+        rate_limited = json.dumps({"error": {"code": "rate_limit_exceeded"}})
+        llm = FakeLLM(
+            [
+                (429, rate_limited, {"retry-after": "0"}),
+                (200, sse(content("Recovered."), finish("stop")), {}),
+            ]
+        )
+
+        answer, _ = self.run_chat(llm)
+
+        self.assertEqual(answer, "Recovered.")
+        self.assertEqual(len(llm.requests), 2)
+
+    def test_chat_endpoint_returns_429_when_llm_stays_rate_limited(self):
+        from fastapi.testclient import TestClient
+
+        rate_limited = json.dumps({"error": {"code": "rate_limit_exceeded"}})
+        llm = FakeLLM([(429, rate_limited, {"retry-after": "0"})] * 2)
+        real_client = httpx.AsyncClient
+        with mock.patch.object(self.app.httpx, "AsyncClient", llm.client_factory(real_client)):
+            response = TestClient(self.app.app).post(
+                "/chat", json={"message": "What is Kubeflow?", "stream": False}
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("rate limit", response.json()["detail"])
+
+    def test_retry_wait_is_bounded(self):
+        self.assertEqual(self.app.retry_wait_seconds("3"), 3.0)
+        self.assertEqual(self.app.retry_wait_seconds("120"), self.app.LLM_MAX_RETRY_WAIT)
+        self.assertEqual(self.app.retry_wait_seconds("not-a-number"), 2.0)
+        self.assertEqual(self.app.retry_wait_seconds(None), 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

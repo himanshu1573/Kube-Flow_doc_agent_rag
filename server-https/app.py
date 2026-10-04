@@ -20,6 +20,11 @@ PORT = int(os.getenv("PORT", "8000"))
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_API_KEY_HEADER = os.getenv("LLM_API_KEY_HEADER", "Authorization")
 LLM_API_KEY_PREFIX = os.getenv("LLM_API_KEY_PREFIX", "Bearer")
+# Output token budgets. Lower them for small per-minute token quotas (e.g. free LLM tiers).
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
+LLM_FOLLOWUP_MAX_TOKENS = int(os.getenv("LLM_FOLLOWUP_MAX_TOKENS", "1000"))
+# Upper bound in seconds for honoring an upstream Retry-After header on HTTP 429.
+LLM_MAX_RETRY_WAIT = float(os.getenv("LLM_MAX_RETRY_WAIT", "10"))
 
 app = FastAPI(title="Kubeflow Agentic RAG API Service", version="2.0.0")
 
@@ -83,6 +88,15 @@ def build_fallback_tool_call(payload: Dict[str, Any]) -> Optional[Dict[str, Any]
         },
     }
 
+def retry_wait_seconds(retry_after: Optional[str], default: float = 2.0) -> float:
+    """Seconds to wait before retrying a 429, honoring Retry-After within LLM_MAX_RETRY_WAIT."""
+    try:
+        wait = float(retry_after) if retry_after is not None else default
+    except ValueError:
+        wait = default
+    return max(0.0, min(wait, LLM_MAX_RETRY_WAIT))
+
+
 async def stream_llm_response(
     payload: Dict[str, Any],
     response_accumulator: Optional[Dict[str, Any]] = None,
@@ -104,8 +118,10 @@ async def stream_llm_response(
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream("POST", KSERVE_URL, json=payload, headers=request_headers) as response:
                 if response.status_code != 200:
+                    error_body = (await response.aread()).decode("utf-8", "replace")[:500]
+                    print(f"[ERROR] LLM HTTP {response.status_code}: {error_body}")
                     if response.status_code == 429 and retry_count < 1:
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(retry_wait_seconds(response.headers.get("retry-after")))
                         async for retry_chunk in stream_llm_response(
                             payload,
                             response_accumulator,
@@ -115,8 +131,10 @@ async def stream_llm_response(
                         return
 
                     error_msg = f"LLM service error: HTTP {response.status_code}"
+                    if response.status_code == 429:
+                        error_msg += " (rate limit reached, retry shortly)"
                     print(f"[ERROR] {error_msg}")
-                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'content': error_msg, 'status': response.status_code})}\n\n"
                     return
                 
                 # Buffer for accumulating tool calls
@@ -298,7 +316,7 @@ async def handle_tool_follow_up(
             "model": original_payload["model"],
             "messages": messages,
             "stream": True,
-            "max_tokens": 1000
+            "max_tokens": LLM_FOLLOWUP_MAX_TOKENS
         }
         
         # Stream the follow-up response
@@ -324,7 +342,9 @@ async def get_non_streaming_response(payload: Dict[str, Any]) -> tuple[str, List
                 elif data.get("type") == "citations":
                     citations.extend(data.get("citations", []))
                 elif data.get("type") == "error":
-                    raise HTTPException(status_code=500, detail=data.get("content", "Unknown error"))
+                    # Surface upstream rate limits as 429; other LLM failures as 502.
+                    status = 429 if data.get("status") == 429 else 502
+                    raise HTTPException(status_code=status, detail=data.get("content", "Unknown error"))
             except json.JSONDecodeError:
                 continue
     
@@ -386,7 +406,7 @@ async def chat(request: ChatRequest):
             "tools": build_tools_for_route(route_decision.target),
             "tool_choice": "auto",
             "stream": True,
-            "max_tokens": 1500
+            "max_tokens": LLM_MAX_TOKENS
         }
         
         if request.stream:
@@ -429,6 +449,8 @@ async def chat(request: ChatRequest):
                 "citations": unique_citations if unique_citations else None
             }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ERROR] Chat handling failed: {e}")
         raise HTTPException(status_code=500, detail=f"Request failed: {e}")
