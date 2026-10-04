@@ -456,8 +456,8 @@ production hardening such as auth, observability, and persistent session state.
 ## 12. If A New AI Agent Takes Over
 
 Start by reading these files:
-- [CONTEXT.md](../../CONTEXT.md)
-- [guide.md](../../guide.md)
+- [CONTEXT.md](project-context.md)
+- [guide.md](working-guide.md)
 - [agent/core/router.py](../../agent/core/router.py)
 - [agent/core/retriever.py](../../agent/core/retriever.py)
 - [server-https/app.py](../../server-https/app.py)
