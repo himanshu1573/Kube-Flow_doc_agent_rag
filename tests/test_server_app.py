@@ -58,9 +58,11 @@ class FakeLLM:
     def __init__(self, responses):
         self.responses = list(responses)
         self.requests = []
+        self.headers = []
 
     def handler(self, request):
         self.requests.append(json.loads(request.content))
+        self.headers.append(dict(request.headers))
         status, body, headers = self.responses.pop(0)
         return httpx.Response(status, text=body, headers=headers)
 
@@ -164,6 +166,93 @@ class ServerToolCallTests(unittest.TestCase):
         self.assertEqual(self.app.retry_wait_seconds("120"), self.app.LLM_MAX_RETRY_WAIT)
         self.assertEqual(self.app.retry_wait_seconds("not-a-number"), 2.0)
         self.assertEqual(self.app.retry_wait_seconds(None), 2.0)
+
+
+class ClientApiKeyTests(unittest.TestCase):
+    """Bring-your-own LLM API key sent by the widget per request."""
+
+    def setUp(self):
+        self.app = load_app_module()
+        self.llm = FakeLLM([(200, sse(content("Answer."), finish("stop")), {})])
+
+    def post_chat(self, headers=None, **config):
+        from fastapi.testclient import TestClient
+
+        real_client = httpx.AsyncClient
+        patches = [mock.patch.object(self.app, name, value) for name, value in config.items()]
+        patches.append(mock.patch.object(self.app.httpx, "AsyncClient", self.llm.client_factory(real_client)))
+        for patch in patches:
+            patch.start()
+        try:
+            return TestClient(self.app.app).post(
+                "/chat",
+                json={"message": "What is Kubeflow?", "stream": False},
+                headers=headers or {},
+            )
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
+
+    def test_client_key_overrides_server_key(self):
+        response = self.post_chat({"X-LLM-API-Key": "user-key"}, LLM_API_KEY="server-key")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.llm.headers[0]["authorization"], "Bearer user-key")
+
+    def test_server_key_used_when_client_sends_none(self):
+        response = self.post_chat(LLM_API_KEY="server-key")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.llm.headers[0]["authorization"], "Bearer server-key")
+
+    def test_client_model_override(self):
+        response = self.post_chat(
+            {"X-LLM-API-Key": "user-key", "X-LLM-Model": "openai/gpt-oss-120b"},
+            MODEL="server-model",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.llm.requests[0]["model"], "openai/gpt-oss-120b")
+
+    def test_required_client_key_rejects_requests_without_one(self):
+        response = self.post_chat(LLM_API_KEY="server-key", REQUIRE_CLIENT_API_KEY=True)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.llm.requests, [], "the server key must not be used")
+
+    def test_client_keys_ignored_when_disabled(self):
+        response = self.post_chat(
+            {"X-LLM-API-Key": "user-key"}, LLM_API_KEY="server-key", ALLOW_CLIENT_API_KEYS=False
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.llm.headers[0]["authorization"], "Bearer server-key")
+
+    def test_malformed_client_key_is_rejected(self):
+        response = self.post_chat({"X-LLM-API-Key": "two words"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.llm.requests, [])
+
+    def test_provider_rejecting_the_key_returns_401(self):
+        self.llm = FakeLLM([(401, json.dumps({"error": {"message": "Invalid API Key"}}), {})])
+
+        response = self.post_chat({"X-LLM-API-Key": "user-key"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("API key", response.json()["detail"])
+
+    def test_config_reports_key_policy_without_leaking_the_key(self):
+        from fastapi.testclient import TestClient
+
+        with mock.patch.object(self.app, "LLM_API_KEY", "server-secret"), \
+                mock.patch.object(self.app, "REQUIRE_CLIENT_API_KEY", True):
+            body = TestClient(self.app.app).get("/config").json()
+
+        self.assertTrue(body["require_client_api_key"])
+        self.assertTrue(body["allow_client_api_keys"])
+        self.assertTrue(body["server_api_key_configured"])
+        self.assertNotIn("server-secret", json.dumps(body))
 
 
 if __name__ == "__main__":

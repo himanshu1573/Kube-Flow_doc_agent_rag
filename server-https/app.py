@@ -2,7 +2,10 @@ import asyncio
 import os
 import json
 import httpx
-from fastapi import FastAPI, HTTPException
+import re
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,6 +28,14 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 LLM_FOLLOWUP_MAX_TOKENS = int(os.getenv("LLM_FOLLOWUP_MAX_TOKENS", "1000"))
 # Upper bound in seconds for honoring an upstream Retry-After header on HTTP 429.
 LLM_MAX_RETRY_WAIT = float(os.getenv("LLM_MAX_RETRY_WAIT", "10"))
+# Bring-your-own-key: clients may send their own key for the configured LLM endpoint
+# (X-LLM-API-Key) and optionally a model (X-LLM-Model). Keys are used for that request
+# only and are never logged or stored. Set REQUIRE_CLIENT_API_KEY=true on public
+# deployments so the server key is never spent on anonymous visitors.
+ALLOW_CLIENT_API_KEYS = os.getenv("ALLOW_CLIENT_API_KEYS", "true").lower() == "true"
+REQUIRE_CLIENT_API_KEY = os.getenv("REQUIRE_CLIENT_API_KEY", "false").lower() == "true"
+CLIENT_API_KEY_PATTERN = re.compile(r"^[\x21-\x7e]{8,512}$")
+CLIENT_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._:/@-]{1,128}$")
 
 app = FastAPI(title="Kubeflow Agentic RAG API Service", version="2.0.0")
 
@@ -88,6 +99,35 @@ def build_fallback_tool_call(payload: Dict[str, Any]) -> Optional[Dict[str, Any]
         },
     }
 
+def build_llm_headers(api_key: str) -> Dict[str, str]:
+    """Auth headers for the LLM endpoint using the configured header name and prefix."""
+    if not api_key:
+        return {}
+    if LLM_API_KEY_HEADER.lower() == "authorization" and LLM_API_KEY_PREFIX:
+        return {LLM_API_KEY_HEADER: f"{LLM_API_KEY_PREFIX} {api_key}"}
+    return {LLM_API_KEY_HEADER: api_key}
+
+
+def resolve_llm_credentials(
+    client_api_key: Optional[str], client_model: Optional[str]
+) -> Tuple[Dict[str, str], str]:
+    """Pick the key and model for one request: the client's if allowed, else the server's."""
+    client_api_key = (client_api_key or "").strip() if ALLOW_CLIENT_API_KEYS else ""
+    client_model = (client_model or "").strip() if ALLOW_CLIENT_API_KEYS else ""
+
+    if client_api_key and not CLIENT_API_KEY_PATTERN.match(client_api_key):
+        raise HTTPException(status_code=400, detail="Malformed X-LLM-API-Key header.")
+    if client_model and not CLIENT_MODEL_PATTERN.match(client_model):
+        raise HTTPException(status_code=400, detail="Malformed X-LLM-Model header.")
+    if REQUIRE_CLIENT_API_KEY and not client_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="This deployment needs your own LLM API key. Add it in the assistant's API key settings.",
+        )
+
+    return build_llm_headers(client_api_key or LLM_API_KEY), client_model or MODEL
+
+
 def retry_wait_seconds(retry_after: Optional[str], default: float = 2.0) -> float:
     """Seconds to wait before retrying a 429, honoring Retry-After within LLM_MAX_RETRY_WAIT."""
     try:
@@ -101,19 +141,17 @@ async def stream_llm_response(
     payload: Dict[str, Any],
     response_accumulator: Optional[Dict[str, Any]] = None,
     retry_count: int = 0,
+    llm_headers: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream response from LLM and handle tool calls, yielding SSE events"""
     citations_collector = []
     if response_accumulator is None:
         response_accumulator = {"content": ""}
-    
+    if llm_headers is None:
+        llm_headers = build_llm_headers(LLM_API_KEY)
+
     try:
-        request_headers: Dict[str, str] = {}
-        if LLM_API_KEY:
-            if LLM_API_KEY_HEADER.lower() == "authorization" and LLM_API_KEY_PREFIX:
-                request_headers[LLM_API_KEY_HEADER] = f"{LLM_API_KEY_PREFIX} {LLM_API_KEY}"
-            else:
-                request_headers[LLM_API_KEY_HEADER] = LLM_API_KEY
+        request_headers: Dict[str, str] = dict(llm_headers)
 
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream("POST", KSERVE_URL, json=payload, headers=request_headers) as response:
@@ -126,6 +164,7 @@ async def stream_llm_response(
                             payload,
                             response_accumulator,
                             retry_count=retry_count + 1,
+                            llm_headers=llm_headers,
                         ):
                             yield retry_chunk
                         return
@@ -133,6 +172,8 @@ async def stream_llm_response(
                     error_msg = f"LLM service error: HTTP {response.status_code}"
                     if response.status_code == 429:
                         error_msg += " (rate limit reached, retry shortly)"
+                    elif response.status_code in (401, 403):
+                        error_msg += " (the LLM provider rejected the API key)"
                     print(f"[ERROR] {error_msg}")
                     yield f"data: {json.dumps({'type': 'error', 'content': error_msg, 'status': response.status_code})}\n\n"
                     return
@@ -172,6 +213,7 @@ async def stream_llm_response(
                                     [(fallback_tool_call, result)],
                                     citations_collector,
                                     response_accumulator,
+                                    llm_headers,
                                 ):
                                     yield follow_up_chunk
                                 return
@@ -257,6 +299,7 @@ async def stream_llm_response(
                                     tool_results,
                                     citations_collector,
                                     response_accumulator,
+                                    llm_headers,
                                 ):
                                     yield follow_up_chunk
 
@@ -289,6 +332,7 @@ async def handle_tool_follow_up(
     tool_results: List[Tuple[Dict[str, Any], str]],
     citations_collector: List[str],
     response_accumulator: Dict[str, Any],
+    llm_headers: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
     """Handle the single follow-up request after all tool calls have executed"""
     try:
@@ -320,20 +364,24 @@ async def handle_tool_follow_up(
         }
         
         # Stream the follow-up response
-        async for chunk in stream_llm_response(follow_up_payload, response_accumulator):
+        async for chunk in stream_llm_response(
+            follow_up_payload, response_accumulator, llm_headers=llm_headers
+        ):
             yield chunk
         
     except Exception as e:
         print(f"[ERROR] Tool follow-up failed: {e}")
         yield f"data: {json.dumps({'type': 'error', 'content': f'Tool follow-up failed: {e}'})}\n\n"
 
-async def get_non_streaming_response(payload: Dict[str, Any]) -> tuple[str, List[str]]:
+async def get_non_streaming_response(
+    payload: Dict[str, Any], llm_headers: Optional[Dict[str, str]] = None
+) -> tuple[str, List[str]]:
     """Get non-streaming response by collecting all streaming chunks"""
     response_content = ""
     citations = []
     response_accumulator = {"content": ""}
     
-    async for chunk in stream_llm_response(payload, response_accumulator):
+    async for chunk in stream_llm_response(payload, response_accumulator, llm_headers=llm_headers):
         if chunk.startswith("data: "):
             try:
                 data = json.loads(chunk[6:].strip())
@@ -342,8 +390,9 @@ async def get_non_streaming_response(payload: Dict[str, Any]) -> tuple[str, List
                 elif data.get("type") == "citations":
                     citations.extend(data.get("citations", []))
                 elif data.get("type") == "error":
-                    # Surface upstream rate limits as 429; other LLM failures as 502.
-                    status = 429 if data.get("status") == 429 else 502
+                    # Surface rate limits as 429, rejected keys as 401, other LLM failures as 502.
+                    upstream = data.get("status")
+                    status = 429 if upstream == 429 else 401 if upstream in (401, 403) else 502
                     raise HTTPException(status_code=status, detail=data.get("content", "Unknown error"))
             except json.JSONDecodeError:
                 continue
@@ -359,6 +408,17 @@ async def hello():
 async def health_check():
     """Health check endpoint for Kubernetes probes"""
     return {"status": "healthy", "service": "https-api"}
+
+@app.get("/config")
+async def client_config():
+    """Public settings the widget needs to decide whether to ask for the user's key"""
+    return {
+        "model": MODEL,
+        "llm_provider_host": urlparse(KSERVE_URL).hostname or "",
+        "allow_client_api_keys": ALLOW_CLIENT_API_KEYS,
+        "require_client_api_key": REQUIRE_CLIENT_API_KEY,
+        "server_api_key_configured": bool(LLM_API_KEY),
+    }
 
 @app.options("/chat")
 async def options_chat():
@@ -376,10 +436,15 @@ async def options_health():
     return {"message": "OK"}
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    x_llm_api_key: Optional[str] = Header(default=None),
+    x_llm_model: Optional[str] = Header(default=None),
+):
     """Chat endpoint with RAG capabilities - supports both streaming and non-streaming"""
     try:
         print(f"[CHAT] Processing message: {request.message[:100]}...")
+        llm_headers, model = resolve_llm_credentials(x_llm_api_key, x_llm_model)
         if request.reset_thread and request.thread_id:
             THREAD_STORE.clear(request.thread_id)
 
@@ -401,7 +466,7 @@ async def chat(request: ChatRequest):
         
         # Create initial payload
         payload = {
-            "model": MODEL,
+            "model": model,
             "messages": THREAD_STORE.get_messages(thread_id),
             "tools": build_tools_for_route(route_decision.target),
             "tool_choice": "auto",
@@ -414,7 +479,7 @@ async def chat(request: ChatRequest):
 
             async def event_stream() -> AsyncGenerator[str, None]:
                 yield f"data: {json.dumps({'type': 'thread', 'thread_id': thread_id, 'route': route_decision.target})}\n\n"
-                async for chunk in stream_llm_response(payload, response_accumulator):
+                async for chunk in stream_llm_response(payload, response_accumulator, llm_headers=llm_headers):
                     yield chunk
                 if response_accumulator["content"].strip():
                     THREAD_STORE.append(thread_id, "assistant", response_accumulator["content"].strip())
@@ -432,7 +497,7 @@ async def chat(request: ChatRequest):
             )
         else:
             # Return non-streaming JSON response
-            response_content, citations = await get_non_streaming_response(payload)
+            response_content, citations = await get_non_streaming_response(payload, llm_headers)
             if response_content.strip():
                 THREAD_STORE.append(thread_id, "assistant", response_content.strip())
             
