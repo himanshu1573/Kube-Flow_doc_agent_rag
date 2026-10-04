@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kubeflow Agent Demo</title>
+  <link rel="stylesheet" href="../docs_styles/chatbot.css" />
+  <style>
+    :root {
+      --page-bg: #f4f7fb;
+      --ink: #10213a;
+      --muted: #53657d;
+      --blue: #2854d8;
+      --blue-dark: #173a9b;
+      --panel: #ffffff;
+      --panel-border: #d9e2f1;
+      --good: #107c41;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(40, 84, 216, 0.15), transparent 32%),
+        linear-gradient(180deg, #eef4ff 0%, var(--page-bg) 100%);
+      color: var(--ink);
+    }
+
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 48px 20px 72px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 28px;
+      align-items: stretch;
+      margin-bottom: 28px;
+    }
+
+    .hero-card,
+    .status-card,
+    .section-card {
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid var(--panel-border);
+      border-radius: 24px;
+      box-shadow: 0 18px 48px rgba(16, 33, 58, 0.08);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero-card {
+      padding: 32px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(40, 84, 216, 0.1);
+      color: var(--blue-dark);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 18px 0 14px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.65;
+      color: var(--muted);
+      max-width: 62ch;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 26px;
+    }
+
+    .primary-btn,
+    .secondary-btn {
+      border: 0;
+      border-radius: 14px;
+      padding: 14px 18px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+
+    .primary-btn {
+      background: linear-gradient(135deg, var(--blue) 0%, var(--blue-dark) 100%);
+      color: #fff;
+      box-shadow: 0 10px 24px rgba(40, 84, 216, 0.25);
+    }
+
+    .secondary-btn {
+      background: #edf2ff;
+      color: var(--blue-dark);
+    }
+
+    .primary-btn:hover,
+    .secondary-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .status-card {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .status-card h2 {
+      margin: 0 0 16px;
+      font-size: 20px;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .status-dot {
+      flex: 0 0 10px;
+      width: 10px;
+      height: 10px;
+      margin-top: 6px;
+      border-radius: 999px;
+      background: var(--good);
+      box-shadow: 0 0 0 5px rgba(16, 124, 65, 0.12);
+    }
+
+    .sections {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin-bottom: 24px;
+    }
+
+    .section-card {
+      padding: 22px;
+    }
+
+    .section-card h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .section-card p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .mini-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--ink);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .demo-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: #10213a;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .demo-bar code {
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.12);
+      font-size: 13px;
+    }
+
+    .demo-note {
+      margin: 0;
+      color: #d4def3;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 920px) {
+      .hero,
+      .sections {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        padding: 24px 14px 48px;
+      }
+
+      .hero-card,
+      .status-card,
+      .section-card {
+        border-radius: 18px;
+      }
+
+      .hero-card {
+        padding: 24px;
+      }
+
+      .hero-actions {
+        flex-direction: column;
+      }
+
+      .primary-btn,
+      .secondary-btn {
+        width: 100%;
+      }
+    }
+  </style>
+  <script>
+    window.KUBEFLOW_AGENT_CONFIG = {
+      apiBaseUrl: "http://127.0.0.1:8000/chat"
+    };
+  </script>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-card">
+        <div class="eyebrow">Architecture B Demo</div>
+        <h1>Kubeflow Agent Section</h1>
+        <p class="subtitle">
+          This prototype is running as a resource-optimized Architecture B setup:
+          Kagent-managed agent flow, live MCP tools, Groq-backed reasoning, and
+          Milvus retrieval for both docs and code.
+        </p>
+        <div class="hero-actions">
+          <button class="primary-btn" id="open-agent">Open Live Agent</button>
+          <button class="secondary-btn" id="ask-routing">Ask Routing Demo Question</button>
+        </div>
+      </div>
+
+      <aside class="status-card">
+        <div>
+          <h2>Live Demo Status</h2>
+          <ul class="status-list">
+            <li class="status-item"><span class="status-dot"></span><span>Kagent controller, UI, tools, and agent are running in GKE.</span></li>
+            <li class="status-item"><span class="status-dot"></span><span>Remote MCP server is accepted and serving Kubeflow retrieval tools.</span></li>
+            <li class="status-item"><span class="status-dot"></span><span>Milvus already contains populated <code>docs_collection</code> and <code>code_collection</code>.</span></li>
+            <li class="status-item"><span class="status-dot"></span><span>The HTTP agent API streams route decisions, tool calls, and final answers.</span></li>
+          </ul>
+        </div>
+      </aside>
+    </section>
+
+    <section class="sections">
+      <article class="section-card">
+        <h3>What Is Being Used</h3>
+        <p>The prototype is aligned with Architecture B at the logic and orchestration level.</p>
+        <ul class="mini-list">
+          <li>Kagent managed agent</li>
+          <li>Remote MCP server for retrieval tools</li>
+          <li>Milvus vector search for docs and code</li>
+          <li>Groq as the external OpenAI-compatible model endpoint</li>
+        </ul>
+      </article>
+
+      <article class="section-card">
+        <h3>What Is Deferred</h3>
+        <p>These pieces are intentionally minimized for the prototype so the demo stays stable on a smaller GKE budget.</p>
+        <ul class="mini-list">
+          <li>In-cluster LLM serving with KServe</li>
+          <li>Istio-heavy managed ingress path</li>
+          <li>Full auth and production-grade policy layers</li>
+          <li>Persistent conversation state store</li>
+        </ul>
+      </article>
+
+      <article class="section-card">
+        <h3>Why This Is The Best Demo Path</h3>
+        <p>The expensive part of Architecture B is not the agent logic. It is the Kubernetes overhead from operator tooling and local model serving.</p>
+        <ul class="mini-list">
+          <li>Faster responses for a live mentor demo</li>
+          <li>Lower RAM and CPU usage in GKE</li>
+          <li>Core Architecture B flow still demonstrated honestly</li>
+          <li>Easy path to harden later without rewriting the backend</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="demo-bar">
+      <div>
+        <strong>Demo tip:</strong>
+        <p class="demo-note">Run the API port-forward first, then open this file in a small local static server so the chat widget can talk to the live backend.</p>
+      </div>
+      <code>kubectl -n docs-agent port-forward service/kubeflow-agent-api 8000:8000</code>
+    </section>
+  </main>
+
+  <script src="../docs_scripts/chatbot.js"></script>
+  <script>
+    function openAgentWithPrefill(message) {
+      const toggle = document.getElementById("chatbot-toggle");
+      const input = document.getElementById("user-input");
+      if (toggle && getComputedStyle(document.getElementById("chatbot-container")).display === "none") {
+        toggle.click();
+      } else if (toggle && !document.body.classList.contains("chatbot-open")) {
+        toggle.click();
+      }
+
+      window.setTimeout(() => {
+        const liveInput = document.getElementById("user-input");
+        if (!liveInput) return;
+        liveInput.value = message;
+        liveInput.dispatchEvent(new Event("input", { bubbles: true }));
+        liveInput.focus();
+      }, 250);
+    }
+
+    document.getElementById("open-agent").addEventListener("click", () => {
+      openAgentWithPrefill("What parts of Architecture B are live in this demo?");
+    });
+
+    document.getElementById("ask-routing").addEventListener("click", () => {
+      openAgentWithPrefill("How does the Kubeflow agent decide whether to search docs, code, or both?");
+    });
+  </script>
+</body>
+</html>

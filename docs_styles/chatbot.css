@@ -80,6 +80,22 @@ body.chatbot-open {
     font-weight: 600;
     letter-spacing: -0.025em;
     text-align: center;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chatbot-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 /* Sidebar Strip Styles */
@@ -361,6 +377,20 @@ body.chatbot-open {
     display: flex;
     margin-bottom: 16px;
     animation: slideIn 0.3s ease-out;
+}
+
+.agent-event {
+    align-self: center;
+    max-width: 82%;
+    margin: -4px 0 4px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(40, 84, 216, 0.08);
+    border: 1px solid rgba(40, 84, 216, 0.15);
+    color: #2854d8;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
 }
 
 @keyframes slideIn {
@@ -793,6 +823,12 @@ body.chatbot-open {
     .chatbot-header {
         border-radius: 0;
     }
+
+    .chatbot-title {
+        flex-direction: column;
+        gap: 6px;
+        font-size: 16px;
+    }
     
     .chat-input-container {
         border-radius: 0;
@@ -800,6 +836,11 @@ body.chatbot-open {
     
     .message-content {
         max-width: 85%;
+    }
+
+    .agent-event {
+        max-width: 92%;
+        font-size: 11px;
     }
     
     .chatbot-toggle {

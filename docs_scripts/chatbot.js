@@ -24,7 +24,7 @@ function createChatbotElements() {
 
         const chatbotTitle = document.createElement('div');
         chatbotTitle.className = 'chatbot-title';
-        chatbotTitle.innerHTML = '<span>Docs Bot</span>';
+        chatbotTitle.innerHTML = '<span>Kubeflow Agent</span><span class="chatbot-badge">Architecture B Live</span>';
 
         const toggleButton = document.createElement('button');
         toggleButton.id = 'toggle-chatbot';
@@ -47,7 +47,7 @@ function createChatbotElements() {
         kubeflowLogo.className = 'kubeflow-logo';
         kubeflowLogo.src = 'https://raw.githubusercontent.com/kubeflow/website/master/static/favicon-32x32.png';
         kubeflowLogo.alt = 'Kubeflow Logo';
-        kubeflowLogo.title = 'Kubeflow Docs Bot';
+        kubeflowLogo.title = 'Kubeflow Agent';
         
         const newChatIcon = document.createElement('button');
         newChatIcon.id = 'sidebar-new-chat';
@@ -110,7 +110,7 @@ function createChatbotElements() {
         const userInput = document.createElement('textarea');
         userInput.id = 'user-input';
         userInput.className = 'chat-input';
-        userInput.placeholder = 'Message Docs Bot...';
+        userInput.placeholder = 'Ask about Kubeflow docs, manifests, or setup...';
         userInput.rows = 1;
 
         const sendButton = document.createElement('button');
@@ -146,7 +146,7 @@ function createChatbotElements() {
         const chatbotToggle = document.createElement('button');
         chatbotToggle.id = 'chatbot-toggle';
         chatbotToggle.className = 'chatbot-toggle';
-        chatbotToggle.innerHTML = '<span class="chat-icon">💬</span><span class="chat-text">Docs Bot</span>';
+        chatbotToggle.innerHTML = '<span class="chat-icon">💬</span><span class="chat-text">Kubeflow Agent</span>';
         document.body.appendChild(chatbotToggle);
 
         // Force a small delay to ensure DOM is updated
@@ -307,12 +307,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     
     function addWelcomeMessage() {
-        const welcomeMsg = "Hello! I'm your documentation assistant. How can I help you today?";
+        const welcomeMsg = "Hello! I'm the Kubeflow Agent. I can route between docs and code context for pipelines, manifests, architecture, and troubleshooting questions.";
         addMessage(welcomeMsg, 'bot');
         messagesHistory.push({
             role: 'assistant',
             content: welcomeMsg
         });
+        addAgentEvent('Managed mode is live. Ask a docs question or a manifest/debugging question to show routing.');
     }
     
     // Auto-save current chat periodically
@@ -466,8 +467,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     // API Configuration
-    const API_BASE_URL = 'https://129.80.218.9.nip.io/api/agent/chat';
-    const AUTH_TOKEN = process.env.AUTH_TOKEN;
+    const agentConfig = window.KUBEFLOW_AGENT_CONFIG || {};
+    const API_BASE_URL = agentConfig.apiBaseUrl || `${window.location.origin}/api/agent/chat`;
+    const AUTH_TOKEN =
+        agentConfig.authToken ||
+        window.localStorage.getItem('kubeflow_agent_auth_token') ||
+        '';
     
     // API connection status
     let isConnected = false;
@@ -490,12 +495,16 @@ document.addEventListener('DOMContentLoaded', async function() {
                 messages: messagesHistory
             };
             
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (AUTH_TOKEN) {
+                headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+            }
+
             const response = await fetch(API_BASE_URL, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${AUTH_TOKEN}`
-                },
+                headers,
                 body: JSON.stringify(payload)
             });
             
@@ -560,6 +569,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         } catch (error) {
             console.error('Error sending message to API:', error);
             removeTypingIndicator();
+            addAgentEvent('Connection error while calling the agent API.');
             addMessage('Sorry, there was an error processing your request. Please try again.', 'bot');
         }
     }
@@ -572,7 +582,17 @@ document.addEventListener('DOMContentLoaded', async function() {
             console.log('System message:', response.content);
             return;
         }
-        
+
+        if (response.type === 'thread') {
+            addAgentEvent(`Router selected: ${response.route || 'auto'}`);
+            return;
+        }
+
+        if (response.type === 'tool_result') {
+            addAgentEvent(`Tool used: ${response.tool_name}`);
+            return;
+        }
+
         if (response.type === 'citations') {
             addCitations(response.citations);
             return;
@@ -849,6 +869,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         messageDiv.appendChild(contentDiv);
         
         chatMessages.appendChild(messageDiv);
+        scrollToBottom();
+    }
+
+    function addAgentEvent(text) {
+        if (!chatMessages) {
+            return;
+        }
+
+        const eventDiv = document.createElement('div');
+        eventDiv.className = 'agent-event';
+        eventDiv.textContent = text;
+        chatMessages.appendChild(eventDiv);
         scrollToBottom();
     }
 

@@ -1,0 +1,14 @@
+{{- /*
+  Kubeflow AI Docs Agent widget.
+  Include it at the end of layouts/partials/footer.html with the partial call
+  documented in website/README.md.
+  Set the backend URL with `params.agentApiUrl` in the Hugo config, or the
+  HUGO_PARAMS_AGENTAPIURL environment variable at build time.
+*/ -}}
+<link rel="stylesheet" href="{{ "css/agent-widget.css" | relURL }}?v=3">
+{{- with site.Params.agentApiUrl }}
+<script>
+  window.KUBEFLOW_AGENT_CONFIG = { apiUrl: {{ . }} };
+</script>
+{{- end }}
+<script src="{{ "js/agent-widget.js" | relURL }}?v=4" defer></script>

@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubeflow-website
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubeflow-website
+  namespace: kubeflow-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubeflow-website
+  template:
+    metadata:
+      labels:
+        app: kubeflow-website
+    spec:
+      containers:
+        - name: website
+          image: __IMAGE__
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubeflow-website
+  namespace: kubeflow-website
+spec:
+  selector:
+    app: kubeflow-website
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: kubeflow-website-cert
+  namespace: kubeflow-website
+spec:
+  domains:
+    - __DOMAIN__
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubeflow-website-ingress
+  namespace: kubeflow-website
+  annotations:
+    kubernetes.io/ingress.class: gce
+    kubernetes.io/ingress.global-static-ip-name: kubeflow-website-global
+    networking.gke.io/managed-certificates: kubeflow-website-cert
+spec:
+  defaultBackend:
+    service:
+      name: kubeflow-website
+      port:
+        number: 80
