@@ -22,7 +22,7 @@ spec:
             - name: PORT
               value: "8000"
             - name: MODEL
-              value: "llama-3.3-70b-versatile"
+              value: "openai/gpt-oss-20b"
             - name: KSERVE_URL
               value: "https://api.groq.com/openai/v1/chat/completions"
             - name: LLM_API_KEY

@@ -6,7 +6,7 @@ metadata:
 spec:
   apiKeySecret: kagent-groq
   apiKeySecretKey: GROQ_API_KEY
-  model: llama-3.1-8b-instant
+  model: openai/gpt-oss-20b
   provider: OpenAI
   openAI:
     baseUrl: https://api.groq.com/openai/v1
