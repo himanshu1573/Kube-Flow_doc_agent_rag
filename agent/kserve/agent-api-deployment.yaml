@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubeflow-agent-api
+  namespace: docs-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubeflow-agent-api
+  template:
+    metadata:
+      labels:
+        app: kubeflow-agent-api
+    spec:
+      containers:
+        - name: api
+          image: asia-south1-docker.pkg.dev/<PROJECT_ID>/docs-agent/kubeflow-agent-api:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PORT
+              value: "8000"
+            - name: MODEL
+              value: "llama-3.3-70b-versatile"
+            - name: KSERVE_URL
+              value: "https://api.groq.com/openai/v1/chat/completions"
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docs-agent-llm-secret
+                  key: api-key
+                  optional: true
+            - name: LLM_API_KEY_HEADER
+              value: "Authorization"
+            - name: LLM_API_KEY_PREFIX
+              value: "Bearer"
+            - name: MILVUS_HOST
+              value: "milvus.docs-agent.svc.cluster.local"
+            - name: MILVUS_PORT
+              value: "19530"
+            - name: DOCS_COLLECTION
+              value: "docs_collection"
+            - name: LEGACY_DOCS_COLLECTION
+              value: "docs_rag"
+            - name: CODE_COLLECTION
+              value: "code_collection"
+            - name: EMBEDDING_MODEL
+              value: "BAAI/bge-base-en-v1.5"
+            - name: THREAD_TTL_SECONDS
+              value: "3600"
+            - name: THREAD_MAX_MESSAGES
+              value: "16"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubeflow-agent-api
+  namespace: docs-agent
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"ports":{"8000":"kubeflow-agent-api-backendconfig"}}'
+spec:
+  selector:
+    app: kubeflow-agent-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+  type: ClusterIP
