@@ -218,3 +218,5 @@ feast_repo/registry.db
 # Compiled pipeline YAML
 pipelines/*.yaml
 !pipelines/README.md
+# Local Milvus data (docker-compose)
+volumes/

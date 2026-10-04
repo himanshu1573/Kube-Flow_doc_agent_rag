@@ -1,0 +1,9 @@
+# Everything needed to run ingestion, the agent API and the tests on one machine.
+# (pipelines/requirements.txt also pulls in Feast for the legacy POC; not needed here.)
+-r server-https/requirements.txt
+kfp
+requests
+beautifulsoup4
+langchain-text-splitters
+PyYAML
+tiktoken

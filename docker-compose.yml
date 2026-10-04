@@ -1,0 +1,49 @@
+# Local stack: Milvus standalone (embedded etcd, local storage) + optional agent API.
+#
+#   docker compose up -d milvus            # vector DB only (API runs on the host via `make api`)
+#   docker compose --profile api up -d     # also build and run the agent API in a container
+#
+# Data persists in ./volumes/milvus (gitignored). `docker compose down -v` does not remove it;
+# delete the folder to start fresh.
+services:
+  milvus:
+    image: milvusdb/milvus:v3.0.2
+    container_name: kf-agent-milvus
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
+      COMMON_STORAGETYPE: local
+      DEPLOY_MODE: STANDALONE
+    volumes:
+      - ./volumes/milvus:/var/lib/milvus
+      - ./deploy/local/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 15s
+      start_period: 60s
+      timeout: 10s
+      retries: 5
+
+  api:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: server-https/Dockerfile
+    container_name: kf-agent-api
+    env_file: .env
+    environment:
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      milvus:
+        condition: service_healthy
