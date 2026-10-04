@@ -403,7 +403,7 @@
     return [
       { icon: ICON.doc, title: "Summarize this page", prompt: 'Summarize the Kubeflow docs page "' + title + '" and list the key steps.' },
       { icon: ICON.rocket, title: "Install Kubeflow", prompt: "How do I install Kubeflow using the manifests?" },
-      { icon: ICON.box, title: "Serve a model with KServe", prompt: "How do I deploy a model with KServe?" },
+      { icon: ICON.box, title: "What is KServe?", prompt: "What is KServe and how does it fit into Kubeflow?" },
       { icon: ICON.code, title: "Show me a manifest", prompt: "Show me the YAML for the notebook controller mutating webhook." },
     ];
   }
